@@ -1,0 +1,6 @@
+PyYAML
+openai
+python-dotenv
+httpx
+rich>=13,<15
+Pillow>=11,<13
