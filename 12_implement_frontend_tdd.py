@@ -3,6 +3,7 @@
 from contextlib import ExitStack
 from pathlib import Path
 
+from infrastructure.reporting.status import is_passed
 from infrastructure.utils.cli import create_parser, resolve_directories
 from infrastructure.stages.frontend.triggers.context import load_e2e_context
 from infrastructure.stages.frontend.triggers.implementation import run_trigger_tdd
@@ -31,10 +32,17 @@ def implement_frontend_triggers(input_dir: Path, arc_dir: Path, pause: bool = Fa
         print(f"Frontend functional smoke {result['status']}: {result['summary']}\nReport: {arc_dir / 'frontend_e2e.json'}", flush=True)
         return result
     except BaseException as error:
-        report.update({"status": "FAILED", "error": str(error)})
+        # A pass that raises because an earlier pass published something it may not rewrite
+        # is blocked, not broken: the record must say so, or the next run would retry a cause
+        # that lives in another pass's artifact.
+        blocked = bool(getattr(error, "upstream", None))
+        report.update({"status": "BLOCKED_UPSTREAM" if blocked else "FAILED",
+            "error": str(error)})
+        if blocked:
+            report["upstream"] = error.upstream
         for requirement in report["requirements"].values():
             if requirement["status"] not in {"GREEN", "NO_TRIGGERS", "NO_DIRECT_TRIGGERS"}:
-                requirement["status"] = "FAILED"
+                requirement["status"] = "BLOCKED_UPSTREAM" if blocked else "FAILED"
         save_json(arc_dir / "frontend_e2e.json", report)
         raise
 
@@ -52,8 +60,9 @@ def main() -> None:
         except (OSError, ValueError, RuntimeError) as error:
             parser.exit(1, f"Execution failed: {error}\n")
 
-    if result["status"] == "COMPLETED_WITH_FAILURES":
-        parser.exit(1, "All implementation tasks were attempted; some acceptance checks failed. See the .arc report.\n")
+    if not is_passed(result["status"]):
+        parser.exit(1, "All implementation tasks were attempted; the frontend acceptance, its"
+            " journeys or a final check did not pass. See the .arc report.\n")
 
 
 if __name__ == "__main__":

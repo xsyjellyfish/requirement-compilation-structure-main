@@ -12,6 +12,8 @@ from infrastructure.utils.presentation.logging import console_log
 from infrastructure.shared.rag.schema import SchemaRetriever
 from infrastructure.stages.requirements.tree import RequirementTree
 from infrastructure.stages.database.schema import apply_patch
+from infrastructure.stages.database.initial_data import (
+    SeedRejected, load_tree, seed_gaps, seed_prerequisites)
 from infrastructure.utils.files import save_json
 from infrastructure.shared.agent.proposals import propose_json
 
@@ -45,6 +47,14 @@ Use SQL-compatible entity/field identifiers. Represent keys and relationships ne
 by the requirements, with compatible referenced field types. Password storage holds
 hashes rather than plaintext. Do not invent unrelated business features.
 
+Seed prerequisites ("Seed prerequisites (prepared before this scenario):" followed by
+"- <kind>: {json}") state records that already exist when the scenario starts. Every
+value of every declared prerequisite must have a home in a persisted field: model the
+entity the prerequisite describes (an account, a profile, a shelf, ...), keep the declared
+identity values in fields a lookup can match, and store a declared credential as a hash
+field rather than a plaintext one. A schema that cannot store a declared prerequisite is
+incomplete even when every WHEN/THEN is modelled.
+
 For existing entities/fields, return only changed properties; omitted properties
 are preserved by the compiler. Use references=null to clear a reference. Return
 entities={} when existing definitions suffice. related_fields lists the qualified
@@ -53,12 +63,80 @@ It is a schema association, not a read/write obligation. Use names from the resu
 schema.
 """
 
+# --- Extension point 02E: seed storability repair ------------------------------
+# Entity discovery owns the prerequisite data plane: a declared prerequisite that no
+# entity can store is repaired here, before step 05 writes tables that cannot hold it.
+SEED_INSTRUCTIONS = """Extend the schema so every declared Seed prerequisite value can be stored.
+The supplied missing_storage entries name a prerequisite value that no entity supports, or a
+prerequisite whose values do not fit one entity. Add or extend the entity the prerequisite
+describes (an account, a profile, a shelf, ...) so every declared value has a persisted field:
+keep the declared identity values in fields a lookup can match, and store a declared credential
+as a hash field ("password_hash" or "hashed_password" documented as a hash) rather than a
+plaintext "password" field. Reuse an entity that already stores the other declared values.
+Do not remove, rename or redefine existing entities and fields, and do not model features the
+prerequisites do not declare.
+
+Return {"entities": {...}, "related_fields": ["Entity.field"]} in the same format as the schema
+update. Each added field contains description, type, nullable, primary_key, unique, references
+and constraints. Return entities={} only when the schema already stores every declared value.
+"""
+
 
 def requirement_nodes(root: dict):
     """Visit leaf requirements in document order; parents only organize the tree."""
     tree = RequirementTree(root)
     for rid in tree.leaves:
         yield {**tree.requirements[rid], "steps": tree.concatenated_steps(rid)}
+
+
+def repair_seed_storability(arc_dir: Path, schema: dict, model, console, max_attempts: int,
+        attempts: int = 2) -> dict:
+    """Give the schema a home for every declared Seed prerequisite, before any DDL exists.
+
+    The check itself is deterministic: ``seed_gaps`` lowers the requirement wording onto
+    the schema exactly as step 05 will, and reports the declared values no entity stores.
+    Only the schema update needs the model. A gap that survives the repair attempts is
+    raised here, so a prerequisite without storage cannot reach step 05 and be discovered
+    after the tables were already written.
+    """
+    tree = load_tree(arc_dir)
+    prerequisites = seed_prerequisites(tree)
+    gaps = seed_gaps(tree, schema)
+    record = {"ok": not gaps, "prerequisites": prerequisites, "gaps": gaps, "attempts": []}
+    if not gaps:
+        return schema
+    owners = sorted({item["source"].split("/")[0] for item in prerequisites})
+    for attempt in range(1, attempts + 1):
+        console.show(f"Seed storability repair {attempt}/{attempts} | Prerequisites without storage",
+            "\n".join(gaps))
+        request = {
+            "seed_prerequisites": prerequisites,
+            "missing_storage": gaps,
+            "symbol_inventory": {name: list(entity.get("fields") or {}) for name, entity in schema["entities"].items()},
+            "retrieved_schema": {"entities": schema["entities"]},
+        }
+        def accept(patch):
+            updated = apply_patch(schema, patch)
+            related = sorted(set(patch.get("related_fields") or []))
+            for rid in owners:
+                if rid in updated["requirements"]:
+                    updated["requirements"][rid] = sorted(set(updated["requirements"][rid]) | set(related))
+            return updated, format_changes(schema, updated)
+
+        (updated, changes), _ = propose_json(model, SEED_INSTRUCTIONS, request, accept,
+            console, f"Seed storability repair {attempt}/{attempts}", max_attempts)
+        schema = updated
+        save_json(arc_dir / "db_schema.json", schema)
+        record["attempts"].append({"attempt": attempt, "changes": changes})
+        gaps = seed_gaps(tree, schema)
+        if not gaps:
+            break
+    record["gaps"] = gaps
+    record["ok"] = not gaps
+    save_json(arc_dir / "seed_precheck.json", record)
+    if gaps:
+        raise SeedRejected("The schema cannot store the prerequisites the requirements declare", gaps)
+    return schema
 
 
 def build_db_schema(arc_dir: Path, pause: bool = False, top_k: int = 6, max_attempts: int = 10) -> dict:
@@ -123,6 +201,11 @@ def build_db_schema(arc_dir: Path, pause: bool = False, top_k: int = 6, max_atte
         ))
         schema = updated
         console.artifact("db_schema", schema, f"{label} | Accepted schema")
+    # --- Pass boundary: the schema must be able to store the declared prerequisites ---
+    # Step 05 derives its seed rows from these same sentences, so proving storability here
+    # keeps a missing entity from surfacing only after the DDL was already written.
+    schema = repair_seed_storability(arc_dir, schema, model, console, max_attempts)
+    save_json(arc_dir / "db_schema.json", schema)
     print(f"Schema saved: {arc_dir / 'db_schema.json'}", flush=True)
     return schema
 

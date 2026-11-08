@@ -4,6 +4,7 @@ import json
 from contextlib import ExitStack
 from pathlib import Path
 
+from infrastructure.reporting.status import is_passed
 from infrastructure.shared.agent.context import SourceFiles
 from infrastructure.shared.project.entrypoints import selected_path
 from infrastructure.shared.agent.loop import run_file_agent
@@ -11,7 +12,12 @@ from infrastructure.shared.agent.recovery import implementation_task, final_chec
 from infrastructure.stages.backend.context import load_context, requirement_context, api_requirement_uses, supplied_sources
 from infrastructure.utils.files import read_artifact
 from infrastructure.stages.backend.runtime import TEST_BINDINGS_PATH, prepare_runtime, sync_implementations, test_bindings_source, test_path
-from infrastructure.stages.backend.testing import BackendChecks, require_green, require_red
+from infrastructure.stages.backend.contracts import format_traceability_summary, requirement_traceability
+from infrastructure.stages.backend.http_tests import (creating_apis, flow_verdict, prepare_http_tests,
+    probe_cases, unverified_flows)
+from infrastructure.stages.backend.testing import BackendChecks, RedRejected, require_green, require_red
+from infrastructure.stages.database.acceptance import (
+    DATABASE_STAGE, SchemaBlocked, implemented_tables, upstream_blocker)
 from infrastructure.utils.cli import create_parser, resolve_directories
 from infrastructure.shared.models.text import TextModel
 from infrastructure.utils.presentation.console import DemoConsole
@@ -90,6 +96,12 @@ Tests, SQL, designs and compiler infrastructure are references according to file
 The compiler runs TypeScript and current/accepted API tests. Repair implementation
 failures without weakening assertions or detecting tests to fake business behavior.
 
+The compiler also replays this API over real HTTP: it boots the generated Express
+app on an ephemeral port with an isolated in-memory database, calls the registered
+route, and checks the HTTP status, the JSON body and the database side effects. A
+handler that only works when called directly, or that crashes or writes on invalid
+input, fails that gate. Do not edit or add files under backend/tests.
+
 Before editing, identify the first concrete failing assertion
 or type error and its root cause.
 
@@ -102,6 +114,24 @@ session behavior consistent with the API contract.
 On rejection, avoid partial writes; on success, persist all fields
 necessary for subsequent login/refresh/navigation scenarios.
 """
+
+
+def flow_coverage(contracts: dict, http: dict) -> dict:
+    """Report the record-creating APIs whose success journey no derived flow exercises.
+
+    A create no flow executes is observed only through its rejections, so accepting it
+    would green-wash the API: the journey was never proven. The planner's own reason is
+    carried into the report, so the defect is actionable instead of a silent skip.
+    """
+    exercised = set(http["flows"]["apis"])
+    notes = {note["api"]: note for note in http["flows"]["notExercised"]}
+    creators = creating_apis(contracts)
+    unverified = [{"api": aid, **notes.get(aid, {"kind": "flow", "reason": "no CRUD flow executes it"})}
+        for aid in creators if aid not in exercised]
+    lines = [f"HTTP FLOW COVERAGE {len(creators) - len(unverified)}/{len(creators)}"
+        " record-creating API(s) exercised by a recorded success flow"]
+    lines.extend(f"  UNVERIFIED {item['api']} ({item['kind']}): {item['reason']}" for item in unverified)
+    return {"returncode": 1 if unverified else 0, "unverified": unverified, "output": "\n".join(lines)}
 
 
 def implement_backend_tdd(arc_dir: Path, pause: bool = False, max_turns: int = 10, max_tests: int = 5) -> dict:
@@ -122,16 +152,31 @@ def implement_backend_tdd(arc_dir: Path, pause: bool = False, max_turns: int = 1
     console.show("TDD preparation | Install dependencies", f"Workspace: {output}\nCommand: npm install --include=dev --no-audit --no-fund")
     install_dependencies(output)
     if not contracts["apis"]:
-        report = {"status": "NO_APIS", "tests": {}, "red": {}, "green": {}, "agents": {}, "summary": {"tests": 0, "pass": 0, "fail": 0}}
+        report = {"status": "NO_APIS", "requirements": {rid: {"status": "NO_DIRECT_APIS", "apis": []}
+                for rid in tree.postorder},
+            "tests": {}, "red": {}, "green": {}, "agents": {}, "summary": {"tests": 0, "pass": 0, "fail": 0}}
         save_json(arc_dir / "backend_tdd.json", report)
         print("No Backend API Primitives require implementation; no tests or model calls were run.")
         return report
     checks = BackendChecks(output)
+    http = prepare_http_tests(output, contracts)
+    coverage = flow_coverage(contracts, http)
+    console.show("HTTP integration | Compile real Express routes",
+        f"Support: {http['support']}\nProbe suites: {len(http['files'])} ({http['probes']} probes)"
+        + f"\nCRUD flows: {http['flows']['file']} ({len(http['flows']['resources'])} resources, {http['flows']['steps']} steps)"
+        + "\nEach probe boots createApp(connection) on an ephemeral port over an isolated in-memory database and issues a real HTTP request."
+        + "\nA flow passes only when every documented success status was actually observed; a documented rejection marks the journey UNVERIFIED."
+        + "\n" + format_traceability_summary(contracts)
+        + ("\n" + coverage["output"] if coverage["unverified"] else ""))
     selection = SourceFiles(output, root="backend/src", tests_root="backend/tests")
     model = TextModel() if contracts["apis"] else None
     owners = {aid: [rid for rid in tree.postorder if aid in contracts["requirements"][rid]] for aid in contracts["apis"]}
     targets = {aid: selected_path(output, "backend_test", aid) or test_path(ids[0], aid) for aid, ids in owners.items()}
-    report = {"status": "RUNNING", "requirements": {}, "tests": {}, "red": {}, "green": {}, "agents": {}}
+    report = {"status": "RUNNING", "requirements": {}, "tests": {}, "red": {}, "green": {}, "agents": {},
+        "traceability": requirement_traceability(contracts),
+        "http": {"support": http["support"], "flows": {**http["flows"], "status": "PENDING",
+                "verdict": "PENDING", "unverified": []},
+            "coverage": coverage, "apis": {}}}
     # Publish a current status before work; an old GREEN is never reused as proof.
     save_json(arc_dir / "backend_tdd.json", report)
     try:
@@ -162,6 +207,8 @@ def implement_backend_tdd(arc_dir: Path, pause: bool = False, max_turns: int = 1
                     label = f"{rid} / {aid} (uses: {', '.join(api_owners)})"
                     console.show(f"{label} | Test Generation: P / Q / R / W", json.dumps(api, ensure_ascii=False, indent=2))
 
+                    accepted_runs = []
+
                     def test_gate(aid=aid):
                         chosen = selected_path(output, "backend_test", aid) or relative
                         targets[aid] = chosen
@@ -170,8 +217,15 @@ def implement_backend_tdd(arc_dir: Path, pause: bool = False, max_turns: int = 1
                         compiled = checks.typecheck(generation_files)
                         if compiled["returncode"]:
                             raise ValueError(f"Test TypeScript compilation failed: {compiled['output']}")
-                        if accepted:
-                            require_green(checks.tests([targets[key] for key in accepted]))
+                        # Compiling every accepted suite still proves the new file cannot break
+                        # them at the type level. Re-running them costs one Node process per
+                        # round and is only meaningful when this round also changed a file they
+                        # share, so a round that edited the target suite alone skips it. The
+                        # RED confirmation, the implementation gate and the final regression
+                        # still run every accepted suite.
+                        if accepted and (workspace.round_changed - {chosen}):
+                            accepted_runs.append(checks.tests([targets[key] for key in accepted]))
+                            require_green(accepted_runs[-1])
                         return compiled
 
                     context = {
@@ -188,7 +242,8 @@ def implement_backend_tdd(arc_dir: Path, pause: bool = False, max_turns: int = 1
                         feedback_filter=lambda value: selection.feedback(workspace, value))
                     for owner in api_owners:
                         report["tests"].setdefault(owner, {})[aid] = targets[aid]
-                    report["agents"][f"tests:{aid}"] = {"turns": agent["turns"]}
+                    report["agents"][f"tests:{aid}"] = {"turns": agent["turns"],
+                        "seconds": agent.get("seconds"), "accepted_rechecks": len(accepted_runs)}
                     save_json(arc_dir / "backend_tdd.json", report)
                     entry["status"] = "CHECKING_RED"
                     binding_source = (output / TEST_BINDINGS_PATH).read_bytes()
@@ -196,7 +251,23 @@ def implement_backend_tdd(arc_dir: Path, pause: bool = False, max_turns: int = 1
                         save_text(output / TEST_BINDINGS_PATH,
                             test_bindings_source(output, contracts["apis"], stubbed=[aid]))
                         result = checks.tests(files_by_api[aid])
-                        require_red(result)
+                        try:
+                            require_red(result)
+                        except RedRejected as error:
+                            # SQLite refusing the published structure is not a test defect:
+                            # this pass may read the SQL but never rewrite it, so the request
+                            # goes back to the pass that owns backend/src/db.
+                            if error.category != "database":
+                                raise
+                            upstream = upstream_blocker(result["output"], schema,
+                                implemented_tables(output, schema)) or {
+                                "stage": DATABASE_STAGE, "tables": [], "problems": {},
+                                "reason": error.category, "evidence": result["output"][:1500]}
+                            entry["status"] = "BLOCKED_UPSTREAM"
+                            save_json(arc_dir / "backend_tdd.json", report)
+                            raise SchemaBlocked(f"{aid}: RED cannot be proven because SQLite "
+                                f"refuses the published table structure ({upstream['reason']})",
+                                upstream) from error
                         report["red"][aid] = {key: result[key] for key in ("tests", "pass", "fail")}
                         console.show(f"{aid} | RED: contract assertions fail against the test stub", result["output"])
                     finally:
@@ -209,25 +280,28 @@ def implement_backend_tdd(arc_dir: Path, pause: bool = False, max_turns: int = 1
                         + "\nAPI may directly operate the database; no further Primitive decomposition."
                     ))
                     regression_files = [relative for key in [*accepted, aid] for relative in files_by_api[key]]
+                    http_files = [http["files"][aid]]
 
                     def implementation_checks():
                         sync_implementations(output, contracts["apis"])
-                        compiled = checks.typecheck(regression_files)
+                        compiled = checks.typecheck([*regression_files, *http_files])
                         if compiled["returncode"]:
-                            return {"typecheck": compiled, "tests": None}
-                        tested = checks.tests(regression_files)
-                        return {"typecheck": compiled, "tests": tested}
+                            return {"typecheck": compiled, "tests": None, "http": None}
+                        return {"typecheck": compiled, "tests": checks.tests(regression_files),
+                            "http": checks.tests(http_files)}
 
                     def implementation_gate():
                         result = implementation_checks()
                         if result["typecheck"]["returncode"]:
                             raise ValueError(result["typecheck"]["output"])
                         require_green(result["tests"])
+                        require_green(result["http"])
                         return result
 
                     api_entry = selected_path(output, "api", aid)
                     current = implementation_checks() if api_entry and (output / api_entry).is_file() else None
-                    if current and current["tests"] and not current["tests"]["returncode"] and current["tests"]["tests"]:
+                    if current and current["tests"] and current["http"] and not current["tests"]["returncode"] \
+                            and not current["http"]["returncode"] and current["tests"]["tests"] and current["http"]["tests"]:
                         agent = {"turns": 0, "checks": current}
                     else:
                         context = {
@@ -243,25 +317,45 @@ def implement_backend_tdd(arc_dir: Path, pause: bool = False, max_turns: int = 1
                     accepted.append(aid)
                     result = agent["checks"]["tests"]
                     report["green"][aid] = {key: result[key] for key in ("tests", "pass", "fail")}
-                    report["agents"][f"implementation:{aid}"] = {"turns": agent["turns"]}
+                    report["http"]["apis"][aid] = {"file": http["files"][aid], "probes": len(probe_cases(contracts, aid)),
+                        **{key: agent["checks"]["http"][key] for key in ("tests", "pass", "fail")}}
+                    report["agents"][f"implementation:{aid}"] = {"turns": agent["turns"],
+                        "seconds": agent.get("seconds")}
                     save_json(arc_dir / "backend_tdd.json", report)
-                    console.show(f"{aid} | GREEN: contract and regression tests pass", result["output"])
+                    console.show(f"{aid} | GREEN: handler tests and real HTTP routes pass",
+                        result["output"] + "\n" + agent["checks"]["http"]["output"])
                     entry["status"] = "GREEN"
                 save_json(arc_dir / "backend_tdd.json", report)
             report["requirements"][rid]["status"] = "GREEN" if all(aid in accepted for aid in ids) else "FAILED"
             save_json(arc_dir / "backend_tdd.json", report)
             console.show(f"{requirement_label} | " + report["requirements"][rid]["status"], "Proceed to the next requirement; failed APIs remain recorded.")
-        all_files = [targets[aid] for aid in accepted]
-        console.show("Final regression | All requirements complete", "Compile the full backend and run all canonical API suites.")
+        all_files = [targets[aid] for aid in accepted] + list(http["files"].values())
+        console.show("Final regression | All requirements complete",
+            "Compile the full backend and run the handler suites plus every real HTTP probe suite.")
         verification = final_checks(console,
             typecheck=(checks.typecheck, None),
             tests=(lambda: checks.tests(all_files), require_green if all_files else None),
+            http_flows=(lambda: checks.tests([http["flows"]["file"]]), require_green if http["flows"]["resources"] else None),
+            http_coverage=(lambda: coverage, None),
             build=(checks.build, None))
         final = verification["tests"].get("result") or {}
+        flows = verification["http_flows"]
+        report["http"]["flows"].update({**flows, "file": http["flows"]["file"],
+            **{key: (flows.get("result") or {}).get(key, 0) for key in ("tests", "pass", "fail")},
+            # A design that creates no record has no journey to replay, so the empty suite
+            # is vacuous; otherwise the run is classified instead of being read as green.
+            "verdict": flow_verdict(flows) if http["flows"]["resources"] else "PASS",
+            "unverified": unverified_flows(flows)})
+        report["http"]["summary"] = {key: sum(entry.get(key, 0) for entry in report["http"]["apis"].values()) + report["http"]["flows"].get(key, 0)
+            for key in ("tests", "pass", "fail")}
         report["summary"] = {key: final.get(key, 0) for key in ("tests", "pass", "fail")}
         complete_report(report, report.get("apis", {}).values(), verification)
         save_json(arc_dir / "backend_tdd.json", report)
-        print(f"TDD {report['status']}: {report['summary']}\nReport: {arc_dir / 'backend_tdd.json'}", flush=True)
+        print(f"TDD {report['status']}: {report['summary']}"
+            f"\nHTTP flows: {report['http']['flows']['verdict']}"
+            + ("" if not report["http"]["flows"]["unverified"] else
+               " (unverified: " + ", ".join(report["http"]["flows"]["unverified"]) + ")")
+            + f"\nReport: {arc_dir / 'backend_tdd.json'}", flush=True)
         return report
     except BaseException as error:
         report["status"] = "FAILED"
@@ -286,8 +380,9 @@ def main() -> None:
         except (OSError, ValueError, RuntimeError) as error:
             parser.exit(1, f"Execution failed: {error}\n")
 
-    if result["status"] == "COMPLETED_WITH_FAILURES":
-        parser.exit(1, "All implementation tasks were attempted; some acceptance checks failed. See the .arc report.\n")
+    if not is_passed(result["status"]):
+        parser.exit(1, "All implementation tasks were attempted; a final backend check did not"
+            " pass. See the .arc report.\n")
 
 
 if __name__ == "__main__":

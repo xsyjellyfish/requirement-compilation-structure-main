@@ -3,6 +3,7 @@
 from contextlib import ExitStack
 from pathlib import Path
 
+from infrastructure.reporting.status import is_passed
 from infrastructure.utils.cli import create_parser, resolve_directories
 from infrastructure.stages.frontend.context import load_ui_context, load_ui_design
 from infrastructure.stages.frontend.ui.implementation import implement_ui
@@ -31,7 +32,7 @@ def implement_frontend_ui(input_dir: Path, arc_dir: Path, pause: bool = False,
             print("No pages require implementation; no model calls, dependency installation or browser tests were run.", flush=True)
             return report
         result = implement_ui(arc_dir, design, TextModel(), console, report, max_turns,
-            images=images, requirement_contexts=contexts)
+            images=images, requirement_contexts=contexts, tree=tree, input_dir=input_dir)
         print(f"UI existence TDD {result['status']}. Checks: {arc_dir / 'ui_checks.json'}", flush=True)
         return result
     except BaseException as error:
@@ -55,8 +56,9 @@ def main() -> None:
         except (OSError, ValueError, RuntimeError) as error:
             parser.exit(1, f"Execution failed: {error}\n")
 
-    if result["status"] == "COMPLETED_WITH_FAILURES":
-        parser.exit(1, "All implementation tasks were attempted; some acceptance checks failed. See the .arc report.\n")
+    if not is_passed(result["status"]):
+        parser.exit(1, "All page tasks were attempted; a final UI check did not pass."
+            " See the .arc report.\n")
 
 
 if __name__ == "__main__":
