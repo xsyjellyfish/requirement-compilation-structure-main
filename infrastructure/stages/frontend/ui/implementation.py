@@ -12,7 +12,8 @@ from infrastructure.shared.agent.loop import run_file_agent
 from infrastructure.shared.agent.recovery import implementation_task, final_checks, complete_report
 from infrastructure.shared.project.entrypoints import selected_path
 from infrastructure.stages.frontend.ui.design import owners, page_context
-from infrastructure.stages.frontend.ui.runtime import prepare_frontend, sync_pages
+from infrastructure.stages.frontend.ui.constraints import required_controls_for_page, requirement_controls
+from infrastructure.stages.frontend.ui.runtime import prepare_frontend, sync_media, sync_pages
 from infrastructure.stages.frontend.ui.testing import FrontendChecks, existence_suite, require_green, presentation_run_status, test_path
 from infrastructure.shared.project.dependencies import install_dependencies
 from infrastructure.utils.files import save_json, save_text
@@ -23,7 +24,9 @@ component Page accepting UiPageProps, imported from frontend/src/ui-runtime.ts u
 a relative import. The compiler owns routing, initial data and display fixtures.
 
 Render layout, style, labels, controls, lists and conditional content from data[var]
-and static element props. Use the configured Tailwind utilities with complete class
+and static element props. Props also include params, the decoded parameters of the current
+dynamic route (for example params.bookName on /books/:bookName); render them when the page
+identifies its subject in the requirement. Use the configured Tailwind utilities with complete class
 strings; use installed React/ReactDOM without new dependencies. Reproduce visual
 references through real elements, not a screenshot background in place of controls.
 Put data-testid=ELEMENT_ID on each actual designed element, including the page root.
@@ -31,7 +34,22 @@ Each test ID must be on the interactive DOM node itself, never an invisible prox
 Preserve actual input/select/button/anchor semantics so Playwright can fill/click
 and the trigger host receives submit/click/change events. Use associated labels,
 specified input types/options, and role="alert" for alert elements.
+The designed element type IS the role an external reviewer locates: a designed link is an
+<a href> (or an element with role="link"), a designed button a <button>, a designed
+checkbox an <input type="checkbox">, a heading an h1-h6, and a list a <ul>/<ol>.
+A styled div or span carrying the test ID and the text is not that control; the display
+suite asserts the designed role, so render the native element instead of styling a copy.
 Respect prop.visible booleans or variable-equality rules and original visible text.
+
+ACCESSIBLE NAMES: a user, a screen reader and the black-box acceptance journey all find a
+control by role and accessible name, so render the designed name exactly.
+- Associate every designed label with its control (<label htmlFor>, a wrapping <label>, or
+  aria-label) and render prop.text as the button's or link's own text.
+- When prop.name_from is set, render exactly that variable's value as the control's accessible
+  name and nothing else: put a description, timestamp or other value in sibling elements, or
+  set aria-label to the single value. A record control whose name mixes several values is a
+  defect to fix, never something a test should match around.
+- Show a rejection in the designed alert element and keep the user on the page.
 
 Use defaultValue/defaultChecked for native editable controls. The host captures native
 input/change events for user_write bindings: checkbox values become booleans and other
@@ -39,6 +57,16 @@ values remain strings. Do not add duplicate input handlers. This presentation ta
 no business API calls, guards, session restoration or state transitions; triggers supply
 those later. Native form submission is suppressed; structural links can use designed hrefs.
 Render fixture data through the ordinary data prop, without inspecting test globals.
+
+INHERITED CONTROL REPETITION: required_controls lists the links, buttons and checkboxes this page
+must show because the requirement that owns the page, or a parent of it, declares them. Render
+each one with that exact role, accessible name and href, including controls inherited from a parent
+requirement that this page's own wording never restates: put inherited controls in a shared
+header or footer region of the page and keep them on every page of that parent's subtree. Never
+rename, truncate or replace one with text, and never drop one because the current page looks fine
+without it.
+Use each visual reference's url for its image, for example <img src="/media/IMG-HOMEPAGE.png" alt="..."/>.
+The compiler copies those assets into the served public directory, so only that URL is fetchable.
 
 Repair supplied writable frontend dependencies when needed, preserving other pages
 and behavior. Use the files map for permissions. The compiler runs TypeScript, current
@@ -50,7 +78,8 @@ changed files; avoid rewriting existing correct components during a local repair
 """
 
 def implement_ui(arc_dir: Path, design: dict, model, console, report: dict, max_turns: int = 10,
-        images: dict | None = None, requirement_contexts: dict | None = None) -> dict:
+        images: dict | None = None, requirement_contexts: dict | None = None, tree=None,
+        input_dir: Path | None = None) -> dict:
     """Implement the complete saved UI/data design through component-existence TDD.
 
     Prepare the project and browser, generate and freeze presence tests, then
@@ -58,7 +87,10 @@ def implement_ui(arc_dir: Path, design: dict, model, console, report: dict, max_
     report; runtime wiring remains compiler-owned."""
     output = arc_dir.parent.resolve()
     prepare_frontend(output)
+    sync_media(output, images, input_dir)
     sync_pages(output, design)
+    controls = requirement_controls(tree) if tree is not None else []
+
     console.show("UI TDD preparation | Dependencies", "Install workspace dependencies and Playwright Chromium. No backend is started.")
     install_dependencies(output)
     checks = FrontendChecks(output)
@@ -70,9 +102,11 @@ def implement_ui(arc_dir: Path, design: dict, model, console, report: dict, max_
     for number, pid in enumerate(design["pages"], 1):
         uses = owners(design, pid)
         relative = test_path(pid)
-        suite = existence_suite(design, pid)
+        required = required_controls_for_page(design, tree, pid, controls) if tree is not None else []
+        suite = existence_suite(design, pid, required)
         save_text(output / relative, suite)
-        report["pages"][pid] = {"status": "TESTS_READY", "requirements": uses, "test_path": relative}
+        report["pages"][pid] = {"status": "TESTS_READY", "requirements": uses, "test_path": relative,
+            "required_controls": [control["id"] for control in required]}
         save_json(arc_dir / "ui_checks.json", report)
         label = f"UI {number}/{len(design['pages'])} {pid}"
         console.show(label + " | Existence tests before implementation", suite)
@@ -108,8 +142,10 @@ def implement_ui(arc_dir: Path, design: dict, model, console, report: dict, max_
             else:
                 context = {"page": page_context(design, pid),
                     "requirements": [{key: value for key, value in (requirement_contexts or {}).get(rid, {"id": rid}).items() if key != "images"} for rid in uses],
+                    "required_controls": [{key: control.get(key) for key in ("id", "role", "name", "href", "element", "inherited", "required_by") if control.get(key) is not None} for control in required],
                     "visual_references": {iid: (images or {})[iid] for iid in design["pages"][pid]["images"]},
                     "implementation_path": selected_path(output, "page", pid)}
+
                 workspace = selection.workspace(target=("page", pid),
                     references=["frontend/src/ui-runtime.ts", relative, "frontend/package.json", "frontend/tsconfig.json"])
                 report["pages"][pid]["status"] = "IMPLEMENTING"

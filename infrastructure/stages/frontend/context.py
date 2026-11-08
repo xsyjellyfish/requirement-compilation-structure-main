@@ -16,6 +16,7 @@ def load_ui_design(arc_dir, tree):
 
 def load_ui_context(arc_dir, input_dir):
     """Load only requirement and image evidence; presentation does not depend on backend artifacts."""
+    from infrastructure.stages.frontend.ui.runtime import media_url
     raw = read_artifact(arc_dir, "requirements.json")
     tree = RequirementTree(raw)
     analysis = read_artifact(arc_dir, "visual_analysis.json")
@@ -31,8 +32,12 @@ def load_ui_context(arc_dir, input_dir):
             source = (input_dir / image["reference"]).resolve()
             if not source.is_relative_to(input_dir.resolve()) or not source.is_file():
                 raise ValueError(f"Missing input image or image escapes input: {image['reference']}")
-            record = {**image, "analysis": analysis.get(image["reference"], {})}
+            # The served URL is part of the evidence: the design and implementation stages can
+            # then reference a real asset instead of inventing a path the browser cannot fetch.
+            record = {**image, "url": media_url(image["id"], image["reference"]),
+                "analysis": analysis.get(image["reference"], {})}
             images[image["id"]] = record
+
         for child in node.get("children", []):
             visit(child)
 

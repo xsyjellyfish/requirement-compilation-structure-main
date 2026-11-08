@@ -9,16 +9,25 @@ import re
 
 from infrastructure.shared.project.entrypoints import import_path, implementation_entrypoint
 from infrastructure.shared.project.initialize import enable_import_case_checks
+from infrastructure.stages.frontend.routing import sync_router
 from infrastructure.utils.files import save_text
 
 PLAYWRIGHT_VERSION = "1.64.1"
 
 UI_RUNTIME = '''// Compiler-owned UI types shared by presentation and interaction stages.
-export interface UiPageProps { data: Readonly<Record<string, unknown>> }
+export type UiRouteParams = Record<string, string>;
+
+export interface UiPageProps {
+  data: Readonly<Record<string, unknown>>;
+  /** Decoded dynamic route parameters, empty for static routes. */
+  params?: Readonly<UiRouteParams>;
+}
 
 declare global {
   interface Window {
     __ARC_UI_FIXTURE__?: { page: string; data: Record<string, unknown> };
+    /** Requests the canonical client rejected; the E2E fixture fails on any entry. */
+    __ARC_API_VIOLATIONS__?: string[];
   }
 }
 
@@ -45,8 +54,13 @@ export interface UiTriggerContext {
   readonly data: Readonly<Record<string, unknown>>;
   readonly input: { value?: string; checked?: boolean; key?: string };
   readonly trigger: { id: string; source: string; event: string };
+  /** Decoded parameters of the current URL, empty for static routes. */
+  readonly params: Readonly<UiRouteParams>;
+  /** Current normalized pathname, for logging or conditional behavior. */
+  readonly route: string;
   update(patch: Record<string, unknown>): void;
-  navigate(pageId: string): void;
+  /** Navigate to a PAGE ID; dynamic routes require their parameters. */
+  navigate(pageId: string, params?: UiRouteParams): void;
   api(apiId: string, request?: UiApiRequest): Promise<UiApiResponse>;
 }
 export type UiTriggerHandler = (context: UiTriggerContext) => void | Promise<void>;
@@ -120,11 +134,63 @@ def prepare_frontend(output: Path) -> None:
     save_text(path, json.dumps(package, indent=2) + "\n")
     save_text(output / "frontend/playwright.ui.config.ts", PLAYWRIGHT_CONFIG)
     save_text(output / "frontend/src/ui-runtime.ts", UI_RUNTIME)
+    sync_router(output)
+
+
+MEDIA_DIR = "frontend/public/media"
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif"}
+
+
+def media_url(image_id: str, reference: str) -> str:
+    """Return the URL the generated application serves one supplied requirement image at.
+
+    Vite serves ``frontend/public`` from the site root, so the compiler copies every supplied
+    image into that directory and hands the page one stable URL. A URL derived from the image ID
+    keeps the design record independent of the input folder and of the original file name.
+    """
+    suffix = Path(str(reference or "")).suffix.lower()
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", str(image_id or "")).strip("-") or "image"
+    return f"/media/{name}{suffix if suffix in IMAGE_SUFFIXES else '.png'}"
+
+
+def sync_media(output: Path, images: dict | None, input_dir: Path | None = None) -> None:
+    """Copy supplied requirement images into the served public directory.
+
+    A reference image that the page cannot fetch is invisible to the browser, so the compiler
+    owns this copy instead of leaving image URLs to the component generator.
+    """
+    target = output / MEDIA_DIR
+    expected = {}
+    for image in (images or {}).values():
+        reference = image.get("reference")
+        if not isinstance(reference, str) or not reference:
+            continue
+        if input_dir is None:
+            raise ValueError(f"Cannot serve image {image.get('id')}: the input directory is required")
+        source = (input_dir / reference).resolve()
+        if not source.is_relative_to(input_dir.resolve()) or not source.is_file():
+            raise ValueError(f"Missing input image or image escapes input: {reference}")
+        expected[media_url(image.get("id"), reference)] = source
+    if not expected:
+        return
+    for url, source in expected.items():
+        destination = target / url.lstrip("/").split("/", 1)[1]
+        if destination.is_file() and destination.read_bytes() == source.read_bytes():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    for stale in target.iterdir() if target.is_dir() else []:
+        if stale.is_file() and f"/media/{stale.name}" not in expected:
+            stale.unlink()
 
 
 def sync_pages(output: Path, design: dict) -> None:
     """Regenerate the page registry from fixed Page exports."""
-    imports, routes = ['import { useState } from "react";', 'import { initialPageData, syncInput } from "./ui-runtime";'], []
+    sync_router(output)
+    imports = ['import { useEffect, useState } from "react";',
+        'import { initialPageData, syncInput } from "./ui-runtime";',
+        'import { initialLocation, popped, routeView } from "./ui-router";']
+    pages, routes = [], []
     defaults = {var: binding["initial"] for var, binding in design["bindings"].items()}
     for number, (pid, page) in enumerate(design["pages"].items()):
         entry = implementation_entrypoint(output, "page", pid)
@@ -132,15 +198,23 @@ def sync_pages(output: Path, design: dict) -> None:
         if entry:
             imported = import_path("frontend/src/App.tsx", entry["path"], extension="")
             imports.append(f'import {{ {entry["export"]} as {component} }} from {json.dumps(imported)};')
-            body = f"<{component} data={{data}} />"
+            body = f"<{component} data={{data}} params={{view.params}} />"
         else:
             body = '<main><h1>UI implementation pending</h1></main>'
-        routes.append(f'    case {json.dumps(page["route"])}: {{\n'
+        pages.append({"id": pid, "route": page["route"]})
+        routes.append(f'    case {json.dumps(pid)}: {{\n'
             f'      const data = initialPageData({json.dumps(pid)}, state);\n'
             f'      return <div onSubmit={{event => event.preventDefault()}} onInputCapture={{event => syncInput(event.target, inputBindings, update)}} onChangeCapture={{event => syncInput(event.target, inputBindings, update)}}>{body}</div>;\n    }}')
     source = "// Compiler-owned routes and display data. UI data bindings without business triggers.\n" + "\n".join(imports)
     source += "\n\nconst defaults: Record<string, unknown> = " + json.dumps(defaults, ensure_ascii=False, indent=2) + ";\n"
     source += "\nconst inputBindings: Record<string, string[]> = " + json.dumps({uid: node["data"] for uid, node in design["elements"].items() if "user_write" in node.get("mode", []) and node.get("data")}) + ";\n"
-    source += '\nexport function App() {\n  const [state, setState] = useState(defaults);\n  const update = (patch: Record<string, unknown>) => setState(current => ({ ...current, ...patch }));\n  switch (window.location.pathname) {\n' + "\n".join(routes)
+    source += "\nconst pages: { id: string; route: string }[] = " + json.dumps(pages) + ";\n"
+    source += ('\nexport function App() {\n  const [state, setState] = useState(defaults);\n'
+        '  const [location, setLocation] = useState(initialLocation);\n'
+        '  const update = (patch: Record<string, unknown>) => setState(current => ({ ...current, ...patch }));\n'
+        '  useEffect(() => {\n    const pop = () => setLocation(popped);\n'
+        '    window.addEventListener("popstate", pop);\n'
+        '    return () => window.removeEventListener("popstate", pop);\n  }, []);\n'
+        '  const view = routeView(pages, location.path);\n  switch (view.pageId) {\n' + "\n".join(routes))
     source += '\n    default: return <main><h1>Page not found</h1></main>;\n  }\n}\n'
     save_text(output / "frontend/src/App.tsx", source)

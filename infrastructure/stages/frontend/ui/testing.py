@@ -10,9 +10,18 @@ import subprocess
 import tempfile
 
 from infrastructure.stages.frontend.ui.design import page_elements, visible
+from infrastructure.stages.frontend.routing import sample_route
 from infrastructure.utils.processes import capture_process, npm_command
 
 KEY_TYPES = {"page", "form", "input", "checkbox", "select", "button", "heading", "link", "list", "image", "alert", "table", "text"}
+
+#: Designed element types whose role a reviewer's locator depends on. A control that only
+#: carries the test ID and the right text is not reachable by ``getByRole``, so the display
+#: suite asserts the role here instead of letting the acceptance journey discover it later.
+ROLE_TYPES = {"button": "button", "link": "link", "checkbox": "checkbox", "heading": "heading",
+    "list": "list"}
+#: Input types a reviewer fills by label, so the rendered control must expose the textbox role.
+TEXT_INPUT_TYPES = {"text", "email", "search", "tel", "url"}
 
 
 def presentation_run_status(result):
@@ -32,11 +41,54 @@ def test_path(pid: str) -> str:
     return f"frontend/tests/ui/{pid}.spec.ts"
 
 
-def existence_suite(design: dict, pid: str) -> str:
-    """Render deterministic presence tests for key visible UI elements across the page's designed display fixtures."""
+def control_assertions(design: dict, control: dict, values: dict) -> list[str]:
+    """Render the browser checks that prove one required control is really reachable.
+
+    An external reviewer finds a control through its role and accessible name, so the suite uses
+    the same locator rather than the internal test ID: a link rendered as a span, a button whose
+    name gained extra text or a link pointed at another href then fails here instead of passing as
+    an invisible or renamed copy.
+    """
+    role, name = control.get("role"), control.get("name")
+    uid = control.get("element")
+    if role not in {"link", "button", "checkbox"} or not isinstance(name, str) or not name or not uid:
+        return []
+    locator = (f"page.getByRole({json.dumps(role)}, {{ name: {json.dumps(name)}, exact: true }})"
+        ".first()")
+    shown = visible(design, uid, values)
+    lines = [f"  await expect({locator}){'' if shown else '.not'}.toBeVisible();"]
+    if shown and control.get("href"):
+        lines.append(f'  await expect({locator}).toHaveAttribute("href", {json.dumps(control["href"])});')
+    if shown and role == "checkbox":
+        lines.append(f'  await expect({locator}).toHaveAttribute("type", "checkbox");')
+    return lines
+
+
+def image_assertions(node: dict) -> list[str]:
+    """Render the checks that prove a designed reference image is actually served.
+
+    A broken source still renders an <img>, so the suite waits for the browser to decode it:
+    a missing static asset fails here instead of surviving as an empty frame.
+    """
+    source = (node.get("prop") or {}).get("src")
+    if not isinstance(source, str) or not source.startswith("/"):
+        return []
+    return [f'  await expect(page.locator("img[src={json.dumps(source)}]").first()).toBeVisible();',
+        f'  await expect.poll(async () => page.locator("img[src={json.dumps(source)}]").first()'
+        '.evaluate(node => (node as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);']
+
+
+def existence_suite(design: dict, pid: str, required: list[dict] | None = None) -> str:
+    """Render deterministic presence tests for key visible UI elements across the page's designed display fixtures.
+
+    ``required`` carries the controls the requirement wording demands on this page, including the
+    ones inherited from a parent requirement, so the browser verifies the same role, name and href
+    an external reviewer would use.
+    """
     page = design["pages"][pid]
     elements = page_elements(design, pid)
     defaults = {var: binding["initial"] for var, binding in design["bindings"].items()}
+    containers = {node.get("parent") for node in elements.values() if node.get("parent")}
     lines = ['// Compiler-owned existence assertions, generated from the UI/data design.',
         'import { test, expect } from "@playwright/test";', '']
     for name, fixture in page["fixtures"].items():
@@ -47,7 +99,7 @@ def existence_suite(design: dict, pid: str) -> str:
             '  page.on("pageerror", error => runtimeErrors.push(error.message));',
             '  await page.addInitScript(fixture => { (window as unknown as { __ARC_UI_FIXTURE__: unknown }).__ARC_UI_FIXTURE__ = fixture; }, '
                 + json.dumps({"page": pid, "data": fixture}, ensure_ascii=False) + ');',
-            f'  await page.goto({json.dumps(page["route"])});',
+            f'  await page.goto({json.dumps(sample_route(page["route"]))});',
             '  if (runtimeErrors.length) throw new Error("UI_RUNTIME_ERROR: " + runtimeErrors.join("\\n"));',
             '  try {',
         ])
@@ -95,6 +147,27 @@ def existence_suite(design: dict, pid: str) -> str:
                         )
             if prop.get("text") and kind in {"heading", "text", "button", "link", "alert"}:
                 lines.append(f'  await expect({locator}).toContainText({json.dumps(prop["text"])});')
+            # An external reviewer locates a control by role and accessible name, so the exact
+            # name is asserted here: a button that concatenates extra text is a UI defect that
+            # must be repaired now, not worked around in a later test.
+            if not (kind in {"input", "checkbox", "select"} and prop.get("label")):
+                name = None
+                if isinstance(prop.get("name_from"), str):
+                    declared = values.get(prop["name_from"])
+                    name = declared if isinstance(declared, str) and declared else None
+                elif kind in {"button", "link"} and uid not in containers:
+                    name = prop.get("label") or prop.get("text")
+                if isinstance(name, str) and name:
+                    lines.append(f"  await expect({locator}).toHaveAccessibleName({json.dumps(name)});")
+            role = ROLE_TYPES.get(kind)
+            if not role and kind == "input" and prop.get("input_type", "text") in TEXT_INPUT_TYPES:
+                # A journey types into a field by its label, so a text field rendered as a
+                # styled div with the right test ID has a name but no addressable role.
+                role = "textbox"
+            if role:
+                lines.append(f'  await expect({locator}).toHaveRole({json.dumps(role)});')
+            if kind == "image":
+                lines.extend(image_assertions(node))
             if kind == "alert":
                 lines.append(f'  await expect({locator}).toHaveAttribute("role", "alert");')
             if kind in {"text", "heading", "alert"}:
@@ -102,6 +175,8 @@ def existence_suite(design: dict, pid: str) -> str:
                     value = values[var]
                     if isinstance(value, str) and value:
                         lines.append(f'  await expect({locator}).toContainText({json.dumps(value)});')
+        for control in required or []:
+            lines.extend(control_assertions(design, control, values))
         lines.extend([
             '  } catch (error) {',
             '    if (runtimeErrors.length) throw new Error("UI_RUNTIME_ERROR: " + runtimeErrors.join("\\n"));',
@@ -138,6 +213,9 @@ def parse_playwright_result(result: dict, include_files: bool = False) -> dict:
         raise ValueError(f"Playwright did not return its JSON report: {result['output']}") from error
     failures = []
     files = {}
+    #: Per-spec failures, so a final full run can replace an earlier per-requirement GREEN
+    #: instead of leaving a requirement accepted that the last run saw fail.
+    failed_files = {}
 
     def visit(suite):
         """Accumulate nested Playwright suite/spec results into the normalized browser-check report."""
@@ -147,6 +225,7 @@ def parse_playwright_result(result: dict, include_files: bool = False) -> dict:
             for test in spec.get("tests", []):
                 for run in test.get("results", []):
                     if run.get("status") not in {"passed", "skipped"}:
+                        failed_files[filename] = failed_files.get(filename, 0) + 1
                         failures.append("\n".join(item.get("message", "") for item in run.get("errors", [])))
         for child in suite.get("suites", []):
             visit(child)
@@ -161,6 +240,7 @@ def parse_playwright_result(result: dict, include_files: bool = False) -> dict:
         "errors": report.get("errors", []), "failures": failures})
     if include_files:
         result["files"] = files
+        result["files_failed"] = failed_files
     result["output"] = json.dumps({key: value for key, value in result.items() if key != "output"}, ensure_ascii=False, indent=2)[-24000:]
     return result
 

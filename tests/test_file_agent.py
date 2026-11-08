@@ -59,7 +59,10 @@ class FileAgentTests(unittest.TestCase):
         gate = Mock(side_effect=[ValueError("Missing implementation"), ValueError("Behavior failed"), {"green": True}])
         result = run_file_agent(model, "Implement the task", {"id": "example"}, workspace,
             gate, 3, Mock(), "example", feedback={"initial": "RED"})
-        self.assertEqual(result, {"turns": 3, "checks": {"green": True}})
+        self.assertEqual({key: result[key] for key in ("turns", "checks")},
+            {"turns": 3, "checks": {"green": True}})
+        # Elapsed time is reported next to the round count so a slow acceptance check shows up.
+        self.assertIsInstance(result["seconds"], float)
         requests = [call.args[1] for call in model.generate_json.call_args_list]
         self.assertEqual(set(requests[0]), {"task", "files", "feedback"})
         self.assertEqual(requests[0]["files"][relative], {"content": None, "writable": True})
@@ -87,7 +90,32 @@ class FileAgentTests(unittest.TestCase):
             self.assertEqual(request["files"][relative]["content"], "original")
         self.assertEqual(read_source(self.root / relative), "fixed")
 
-    def test_fixed_paths_and_runtime_registration_need_no_index(self):
+    def test_a_gate_can_tell_this_rounds_edits_from_earlier_ones(self):
+        """A gate re-runs a shared suite only when this round touched a shared file."""
+        target, shared = "src/current.ts", "src/shared.ts"
+        save_text(self.root / target, "original")
+        save_text(self.root / shared, "shared")
+        workspace = FileWorkspace(self.root, {target, shared})
+        seen = []
+
+        def gate():
+            """Record this round's edits, as an acceptance gate would."""
+            seen.append(set(workspace.round_changed))
+            if len(seen) == 1:
+                raise ValueError("src/current.ts(1,1): error TS2322: not assignable")
+            return {"green": True}
+
+        model = Mock()
+        model.generate_json.side_effect = [{"edits": [{"path": target, "content": "first"}]},
+            {"edits": [{"path": shared, "content": "second"}]}]
+        result = run_file_agent(model, "Implement", {}, workspace, gate, 3, Mock(), "example")
+        self.assertEqual(result["turns"], 2)
+        # Each round reports only its own edits; the cumulative set keeps both.
+        self.assertEqual(seen, [{target}, {shared}])
+        self.assertEqual(workspace.round_changed, {shared})
+        self.assertEqual(workspace.changed_paths, {target, shared})
+
+
         initialize_project(self.root)
         api = {"API-EXAMPLE": {"signature": {"name": "example", "method": "GET", "path": "/api/example"}}}
         prepare_runtime(self.root, api)

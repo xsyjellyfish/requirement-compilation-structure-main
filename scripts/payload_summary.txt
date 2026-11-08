@@ -1,0 +1,30 @@
+mode: legacy
+requirement  phase              files writable source chars  task chars payload chars   ~tokens
+REQ-1        test_round            30        1      89,045      27,371       122,595    34,054
+REQ-1        impl_round            29       12      86,750      27,399       120,156    33,377
+REQ-1        impl_repair_round     29       12      86,750      27,399       120,156    33,377
+REQ-2        test_round            30        1      91,348      37,619       135,289    37,580
+REQ-2        impl_round            29       12      89,053      37,726       132,929    36,925
+REQ-2        impl_repair_round     29       12      89,053      37,726       132,929    36,925
+REQ-3        test_round            30        1      89,658      35,220       131,092    36,414
+REQ-3        impl_round            29       12      87,363      35,327       128,732    35,759
+REQ-3        impl_repair_round     29       12      87,363      35,327       128,732    35,759
+REQ-4        test_round            30        1      90,153      32,836       129,116    35,866
+REQ-4        impl_round            29       12      87,858      32,948       126,761    35,211
+REQ-4        impl_repair_round     29       12      87,858      32,948       126,761    35,211
+total        all phases                                                    1,535,248   426,458
+mode: focused
+requirement  phase              files writable source chars  task chars payload chars   ~tokens
+REQ-1        test_round             8        1      46,071      27,371        75,963    21,101
+REQ-1        impl_round            11        6      48,224      27,399        78,438    21,788
+REQ-1        impl_repair_round     11        6      48,224      27,399        78,438    21,788
+REQ-2        test_round             9        1      53,675      37,619        94,299    26,194
+REQ-2        impl_round            13        8      58,117      37,726        99,377    27,605
+REQ-2        impl_repair_round     13        8      58,117      37,726        99,377    27,605
+REQ-3        test_round             9        1      49,816      35,220        87,814    24,393
+REQ-3        impl_round            13        8      53,868      35,327        92,480    25,689
+REQ-3        impl_repair_round     13        8      53,868      35,327        92,480    25,689
+REQ-4        test_round             9        1      49,691      32,836        85,177    23,660
+REQ-4        impl_round            13        8      52,593      32,948        88,614    24,615
+REQ-4        impl_repair_round     13        8      52,593      32,948        88,614    24,615
+total        all phases                                                    1,061,071   294,742

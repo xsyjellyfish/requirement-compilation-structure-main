@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 
+from infrastructure.shared.api.paths import express_path
 from infrastructure.shared.project.entrypoints import import_path, implementation_entrypoint
 from infrastructure.shared.project.initialize import enable_import_case_checks
 from infrastructure.utils.files import save_text
@@ -65,10 +66,15 @@ def register_source(apis: dict, output: Path) -> str:
             # No per-API placeholder file is created. Unimplemented routes return 501.
             lines.append(f'const handler{number} = async (_request: ApiRequest, _connection: Database.Database): Promise<ApiResponse> => ({{ status: 501, body: {{ error: "Not implemented" }} }});')
     lines.append('\nexport function registerApis(app: Express, connection: Database.Database): void {')
-    for number, api in enumerate(apis.values()):
+    for number, (aid, api) in enumerate(apis.items()):
         signature = api["signature"]
+        # The API IR may spell a parameter as {name} or :name; Express only routes the latter.
+        try:
+            route = express_path(signature["path"])
+        except ValueError as error:
+            raise ValueError(f"{aid}: {error}") from error
         lines.extend([
-            f'  app.{signature["method"].lower()}({json.dumps(signature["path"])}, async (req, res, next) => {{',
+            f'  app.{signature["method"].lower()}({json.dumps(route)}, async (req, res, next) => {{',
             '    try {',
             f'      const result = await handler{number}({{',
             '        params: Object.fromEntries(Object.entries(req.params).map(([key, value]) => [key, String(value)])),',

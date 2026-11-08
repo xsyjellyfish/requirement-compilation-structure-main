@@ -187,10 +187,16 @@ class FrontendFlow(unittest.TestCase):
                     self.assertTrue(payload["files"][f"frontend/src/screens/{pid}.tsx"]["writable"])
                 for path in api_paths.values():
                     self.assertTrue(payload["files"][path]["writable"])
-                for path in ("frontend/src/features/other-page-helper.ts", "backend/src/features/other-api-helper.ts", "frontend/src/style.css"):
-                    self.assertTrue(payload["files"][path]["writable"])
-                self.assertFalse(payload["files"]["backend/src/server.ts"]["writable"])
-                self.assertFalse(payload["files"]["backend/src/db/client.ts"]["writable"])
+                # Only the requirement's own surface is supplied up front: an unrelated
+                # helper stays out of the request until a failing check names it.
+                self.assertTrue(payload["files"]["frontend/src/style.css"]["writable"])
+                for path in ("frontend/src/features/other-page-helper.ts",
+                        "backend/src/features/other-api-helper.ts"):
+                    self.assertNotIn(path, payload["files"])
+                # Compiler-owned wiring is never writable, and only reaches the request
+                # when the requirement actually imports it.
+                for path in ("backend/src/server.ts", "backend/src/db/client.ts"):
+                    self.assertFalse((payload["files"].get(path) or {}).get("writable", False))
                 if len(implementation_calls) == 1:
                     ids = sorted(tid for tid, path in task["implementation_paths"].items()
                         if payload["files"][path]["content"] is None)
@@ -201,8 +207,6 @@ class FrontendFlow(unittest.TestCase):
                         "content": "export function handle() {}"} for tid in ids]
                     if backend_repair:
                         edits.append({"path": api_paths["API-SAVE"], "content": "export function handle() { /* fixed integration */ }"})
-                        edits.extend({"path": path, "content": "export const helper = 4;"} for path in (
-                            "frontend/src/features/other-page-helper.ts", "backend/src/features/other-api-helper.ts"))
                     return {"edits": edits}
                 if partial_batch:
                     self.assertIn("Create all supplied trigger files", payload["feedback"][0]["error"])
@@ -278,8 +282,12 @@ class FrontendFlow(unittest.TestCase):
             self.assertEqual(backend_checks.call_count, 3 if backend_fails_once else 2)
             self.assertTrue(all(call.args == (self.output.resolve(),) for call in backend_checks.call_args_list))
             self.assertTrue(all(call.args == (backend_suites,) for call in api_checks.tests.call_args_list))
+            # The handler of a called API is repairable; unrelated helpers were never sent.
+            handler = (self.output / api_paths["API-SAVE"]).read_text()
+            self.assertTrue("fixed integration" in handler or "API regression repaired" in handler, handler)
             for path in ("frontend/src/features/other-page-helper.ts", "backend/src/features/other-api-helper.ts"):
-                self.assertEqual((self.output / path).read_text(), "export const helper = 4;")
+                self.assertEqual((self.output / path).read_text(), "export const helper = 1;"
+                    if "page" in path else "export const helper = 2;")
         else:
             backend_checks.assert_called_once_with(self.output.resolve())
         self.assertEqual(report["summary"]["ui_tests"], 0)

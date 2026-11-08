@@ -72,8 +72,83 @@ def require_green(report: dict) -> None:
         raise ValueError(f"Tests are not GREEN: {report}")
 
 
+class RedRejected(ValueError):
+    """RED was not proven, so the contract tests must not be treated as frozen evidence.
+
+    ``category`` names the reason, and ``failures`` holds the failing tests that carried it:
+    ``infrastructure`` (the suite could not run), ``database`` (SQLite refused the published
+    table structure), ``vacuous`` (nothing failed), or ``runtime`` (a thrown error instead of
+    a failed assertion).
+    """
+
+    def __init__(self, message: str, category: str, failures=()):
+        super().__init__(message)
+        self.category = category
+        self.failures = list(failures)
+
+
+#: A TAP failure block starts at ``not ok`` and repeats one line per failing test.
+FAILURE = re.compile(r"^not ok \d+ - (?P<name>.*)$", re.MULTILINE)
+CODE = re.compile(r"^\s+code: '(?P<code>[^']+)'", re.MULTILINE)
+#: Failures of the test harness itself: the suite proved nothing about behavior.
+INFRASTRUCTURE = (r"\bSyntaxError\b", r"ERR_MODULE_NOT_FOUND", r"Cannot find module",
+    r"ERR_UNKNOWN_FILE_EXTENSION", r"ERR_DLOPEN_FAILED", r"ERR_INVALID_ARG_TYPE")
+#: Failures only the pass that owns the SQL can fix, as SQLite reports them.
+DATABASE = (r"non-deterministic use of", r"\bin a CHECK constraint\b", r"\bin a generated column\b")
+
+
+def failure_blocks(output: str) -> list[dict]:
+    """Split a TAP report into one record per failing test, with its error code and kind.
+
+    A report without TAP blocks is treated as one block, so a shortened or crashed report
+    is judged by the evidence it does contain instead of being accepted silently.
+    """
+    blocks, current = [], None
+    for line in str(output).splitlines():
+        match = FAILURE.match(line)
+        if match:
+            current = {"name": match.group("name").strip(), "lines": []}
+            blocks.append(current)
+        elif current is not None:
+            current["lines"].append(line)
+    if not blocks:
+        blocks = [{"name": "(suite)", "lines": str(output).splitlines()}]
+    for block in blocks:
+        block["text"] = "\n".join(block.pop("lines"))
+        found = CODE.search(block["text"])
+        block["code"] = found.group("code") if found else ""
+        block["kind"] = ("infrastructure" if matches(block["text"], INFRASTRUCTURE)
+            else "database" if matches(block["text"], DATABASE)
+            else "assertion" if block["code"] == "ERR_ASSERTION" or "AssertionError" in block["text"]
+            else "runtime")
+    return blocks
+
+
+def matches(text: str, patterns) -> bool:
+    """Report whether the text contains one of the case-insensitive evidence patterns."""
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+
 def require_red(report: dict) -> None:
-    """Require failing assertions and reject infrastructure errors, skipped tests, or an already passing suite."""
-    infrastructure_errors = ("SyntaxError", "ERR_MODULE_NOT_FOUND", "Cannot find module", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_DLOPEN_FAILED")
-    if not report["returncode"] or not report.get("tests") or not report.get("fail") or "ERR_ASSERTION" not in report["output"] or any(error in report["output"] for error in infrastructure_errors):
-        raise ValueError(f"Expected assertion-based RED, not an infrastructure error or a vacuous test: {report}")
+    """Require failing contract assertions and reject every other reason the suite failed.
+
+    RED means the frozen tests disagree with the stub. A suite that already passes, holds no
+    test, cannot be imported, is refused by SQLite, or throws instead of asserting proves
+    something else. Accepting such a report freezes a test that never described the contract,
+    and the implementation agent is then asked to repair a cause it cannot reach.
+    """
+    blocks = failure_blocks(report.get("output") or "")
+    for category, summary in (
+            ("infrastructure", "the suite could not run"),
+            ("database", "SQLite refused the published table structure")):
+        found = [block for block in blocks if block["kind"] == category]
+        if found:
+            raise RedRejected(f"Expected assertion-based RED, but {summary}: {found}\n{report}",
+                category, found)
+    if not report["returncode"] or not report.get("tests") or not report.get("fail"):
+        raise RedRejected(f"Expected assertion-based RED, but the suite did not fail: {report}",
+            "vacuous", blocks)
+    found = [block for block in blocks if block["kind"] == "assertion"]
+    if not found:
+        raise RedRejected(f"Expected failing assertions, but the suite threw runtime errors: "
+            f"{blocks}\n{report}", "runtime", blocks)

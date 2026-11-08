@@ -101,7 +101,9 @@ def _http_response(response: httpx.Response) -> None:
 def http_client() -> httpx.Client:
     """Connect directly, retaining audit hooks and the SDK's transport limits."""
     from openai import DefaultHttpxClient
-    return DefaultHttpxClient(trust_env=False, timeout=httpx.Timeout(600),
+    # The SDK builds its own transport class, so a plain number keeps the same 600 s limit
+    # for every field; wrapping it in another library's Timeout nests the values instead.
+    return DefaultHttpxClient(trust_env=False, timeout=600,
         event_hooks={"request": [_http_request], "response": [_http_response]})
 
 
@@ -232,7 +234,19 @@ def _structured_output_view(content, usage, elapsed):
     return Group(*views)
 
 
-def _count_call(usage, elapsed, failed=False):
+def _usage_ledger(usage):
+    """Return one call's reported counts under stable task/report keys.
+
+    A provider that omits a count keeps ``None`` so a report never claims a zero it did
+    not receive; the flat stage totals keep their existing display names.
+    """
+    counts = _usage_counts(usage)
+    return {key: counts[name] for key, name in (("input", "Input"), ("cached input", "Cached input"),
+        ("output", "Output"), ("reasoning", "Reasoning"), ("total", "Total"))}
+
+
+def _count_call(usage, elapsed, failed=False, activity=None):
+    """Accumulate stage totals and the same counts for the task that spent them."""
     session = session_info()
     if session is None:
         return
@@ -244,6 +258,22 @@ def _count_call(usage, elapsed, failed=False):
         if value is not None:
             stats[key] = stats.get(key, 0) + value
             stats[key + " reports"] = stats.get(key + " reports", 0) + 1
+    # Attributing tokens to the task that requested them is what makes a budget and an
+    # after-the-fact review possible; a stage total alone cannot say which requirement,
+    # page or API spent the time.
+    task = stats.setdefault("tasks", {}).setdefault(activity or "unattributed", {
+        "calls": 0, "failed": 0, "seconds": 0.0,
+        **{key: 0 for key in ("input", "cached input", "output", "reasoning", "total")},
+        **{key + " reports": 0 for key in ("input", "cached input", "output", "reasoning", "total")}})
+    task["calls"] += 1
+    task["failed"] += int(failed)
+    # Both sums stay unrounded and accumulate the same elapsed values, so the stage total is
+    # never smaller than the task that spent it; presentation rounds them for display.
+    task["seconds"] += elapsed
+    for key, value in _usage_ledger(usage).items():
+        if value is not None:
+            task[key] += value
+            task[key + " reports"] += 1
 
 
 def show_call_totals():
@@ -258,6 +288,16 @@ def show_call_totals():
         view.add_row(text(key), text(f"{stats[key]:,}" if key in stats else "unavailable"),
             text(f"reported in {stats.get(key + ' reports', 0)}/{stats['calls']} calls"))
     show_panel("Stage model usage | reported counts only", view, tone="output")
+    tasks = stats.get("tasks") or {}
+    if not tasks:
+        return
+    rows = table("Task", "Calls", "Time", "Input", "Output", "Reasoning")
+    for name, task in sorted(tasks.items(), key=lambda item: (-(item[1].get("total") or item[1].get("input") or 0),
+            -item[1]["seconds"], item[0]))[:12]:
+        rows.add_row(text(preview(name, max_chars=64)), text(str(task["calls"])), text(f"{task['seconds']:.1f} s"),
+            *[text(f"{task[key]:,}" if task[key + " reports"] else "unavailable")
+                for key in ("input", "output", "reasoning")])
+    show_panel("Stage model usage by task | largest first", rows, tone="output")
 
 
 def invoke(client, arguments: dict):
@@ -283,18 +323,21 @@ def invoke(client, arguments: dict):
         elapsed = monotonic() - started
         # Preserve the SDK envelope and untouched message content before any JSON repair.
         raw = response.model_dump(mode="json")
-        _record("response", elapsed_seconds=elapsed, response=raw)
+        usage = raw.get("usage") or {}
+        # One compact ledger next to the untruncated envelope: tokens, latency and task
+        # attribution per call, without duplicating the request/response bodies already
+        # recorded. The event vocabulary stays ``request``/``http_*``/``response``.
+        _record("response", elapsed_seconds=elapsed, usage=_usage_ledger(usage), response=raw)
         waiting.close()
         content = "\n".join(choice.message.content or "" for choice in response.choices)
-        usage = raw.get("usage") or {}
-        _count_call(usage, elapsed)
+        _count_call(usage, elapsed, activity=activity)
         full_detail(f"[MODEL OUTPUT] {label}", _usage_summary(usage) + f"\nRound-trip latency: {elapsed:.2f} s" + ("\n" + content if verbose else ""))
         show_panel(f"[MODEL OUTPUT] {label} | {elapsed:.2f}s",
             _output_view(content, usage, elapsed) if verbose else _usage_view(usage, elapsed), tone="output")
         return response
     except BaseException as error:
         elapsed = monotonic() - started
-        _count_call({}, elapsed, failed=True)
+        _count_call({}, elapsed, failed=True, activity=activity)
         waiting.close()
         chain = _exception_chain(error)
         cause = ": ".join(f"{item['type']}: {item['message']}" for item in chain[1:]) or None

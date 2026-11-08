@@ -80,6 +80,7 @@ import type Database from "better-sqlite3";
 import { basename, dirname } from "node:path";
 import { createDatabaseClient } from "../../../../backend/src/db/client.js";
 import { initializeDatabase } from "../../../../backend/src/db/initialize.js";
+import { requireSeedData } from "../../../../backend/src/db/seed.js";
 export { fixturePasswordHash } from "../../../../backend/tests/support/context.js";
 export const test = base.extend<{ database: Database.Database; applicationErrors: void }>({
   database: [async ({}, use) => {
@@ -94,6 +95,10 @@ export const test = base.extend<{ database: Database.Database; applicationErrors
         const tables = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
         for (const table of tables) connection.exec(`DELETE FROM "${table.name.replaceAll('"', '""')}"`);
       })();
+      // The requirement declares prerequisite data, so a test that starts from an empty
+      // database must still observe it: the declared records are restored, and only the
+      // records the test itself creates are isolated.
+      requireSeedData(connection);
       connection.pragma("foreign_keys = ON");
       await use(connection);
     } finally { connection.close(); }
@@ -106,6 +111,12 @@ export const test = base.extend<{ database: Database.Database; applicationErrors
       if (new URL(request.url()).pathname.startsWith("/api/")) errors.push("E2E_NETWORK_ERROR: " + request.url());
     });
     await use();
+    // The canonical client records every request that contradicts the API contract or
+    // reached no route, so a handler that catches the error cannot hide it.
+    const violations = await page.evaluate(
+      () => (window as unknown as { __ARC_API_VIOLATIONS__?: string[] }).__ARC_API_VIOLATIONS__ ?? [],
+    ).catch(() => [] as string[]);
+    for (const item of violations) errors.push(item);
     if (errors.length) throw new Error(errors.join("\\n"));
   }, { auto: true }],
 });

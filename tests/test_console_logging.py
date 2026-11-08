@@ -14,7 +14,7 @@ from openai import OpenAI
 from infrastructure.shared.models.text import TextModel, reasoning_arguments
 from infrastructure.shared.models.vision import VisualModel
 from infrastructure.utils.presentation.console import DemoConsole, preview, show_panel, display_width, WaitingStatus
-from infrastructure.utils.presentation.logging import console_log
+from infrastructure.utils.presentation.logging import console_log, model_tokens_used, model_usage
 from infrastructure.utils.presentation.model_io import _http_request, _http_response, _input_summary, _usage_summary, invoke
 
 
@@ -311,6 +311,56 @@ class ConsoleLogging(unittest.TestCase):
                 expected_line = f"Reported tokens | input: 10 | cached input: {expected} | output: 20 | total: 30"
                 self.assertRegex(terminal.getvalue(), rf"Cached input\s+│ {expected}\s")
                 self.assertIn(expected_line, (root / "compiler.log").read_text())
+
+    def test_each_task_keeps_the_usage_of_its_own_calls(self):
+        """A stage total cannot say which task spent tokens; the per-call ledger can."""
+        model = self.model(lambda request: httpx.Response(200, json=self.response('{"ok":true}')))
+        console = DemoConsole()
+        terminal = StringIO()
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with redirect_stdout(terminal), console_log(root, stage="12_implement_frontend.py"):
+                console.show("Page home", "{}")
+                model.generate_json("Generate.", {})
+                model.generate_json("Generate.", {})
+                console.show("Trigger TR-SAVE", "{}")
+                model.generate_json("Generate.", {})
+                usage = model_usage()
+                self.assertEqual(usage["calls"], 3)
+                self.assertEqual(usage["Total"], 90)
+                self.assertEqual(model_tokens_used(), 90)
+                tasks = usage["tasks"]
+                self.assertEqual(list(tasks), ["Page home", "Trigger TR-SAVE"])
+                self.assertEqual([tasks["Page home"][key] for key in ("calls", "input", "output", "total")],
+                    [2, 20, 40, 60])
+                # Every call belongs to exactly one task, so the task rows partition the stage total.
+                self.assertEqual([task["calls"] for task in tasks.values()], [2, 1])
+                self.assertEqual(usage["seconds"], sum(task["seconds"] for task in tasks.values()))
+                self.assertEqual(tasks["Trigger TR-SAVE"]["total"], 30)
+                # A stage report is written as JSON, so the recorded totals must already be safe.
+                self.assertEqual(json.loads(json.dumps(usage))["tasks"], tasks)
+            records = [json.loads(line) for line in (root / "model_calls.jsonl").read_text().splitlines()]
+        responses = [record for record in records if record["event"] == "response"]
+        self.assertEqual(len(responses), 3)
+        ledger = {"input": 10, "cached input": None, "output": 20, "reasoning": None, "total": 30}
+        self.assertEqual([record["usage"] for record in responses], [ledger] * 3)
+        self.assertEqual([record["response"]["id"] for record in responses], ["chat-test"] * 3)
+
+    def test_a_failed_call_is_counted_against_the_task_that_asked(self):
+        """A call that never returned still spent time, and the task must own it."""
+        model = self.model(lambda request: httpx.Response(500, json={"error": {"message": "upstream down"}}))
+        console = DemoConsole()
+        with TemporaryDirectory() as temporary, redirect_stdout(StringIO()):
+            with console_log(Path(temporary), stage="10_implement_frontend.py"):
+                console.show("Page home", "{}")
+                with self.assertRaises(RuntimeError):
+                    model.generate_json("Generate.", {})
+                usage = model_usage()
+        self.assertEqual((usage["calls"], usage["failed"]), (1, 1))
+        self.assertNotIn("Total", usage)
+        task = usage["tasks"]["Page home"]
+        self.assertEqual((task["calls"], task["failed"], task["total"]), (1, 1, 0))
+        self.assertEqual(task["total reports"], 0)
 
     def test_preview_limits_single_line_and_many_short_lines(self):
         self.assertLess(len(preview("x" * 1000000)), 6000)

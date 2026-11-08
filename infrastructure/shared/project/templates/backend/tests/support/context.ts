@@ -2,11 +2,15 @@ import type { TestContext } from "node:test";
 import { scryptSync } from "node:crypto";
 import { createDatabaseClient } from "../../src/db/client.js";
 import { initializeDatabase } from "../../src/db/initialize.js";
+import { requireSeedData } from "../../src/db/seed.js";
 import type { ApiRequest } from "../../src/api/types.js";
 
 export function createTestDatabase(context: TestContext) {
   const connection = createDatabaseClient(":memory:");
   initializeDatabase(connection);
+  // A compiled test observes the same prerequisites a deployment has; a missing one is a
+  // setup failure, not a silently different starting state.
+  requireSeedData(connection);
   context.after(() => connection.close());
   return connection;
 }

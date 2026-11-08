@@ -140,15 +140,24 @@ class CompilerCLI(unittest.TestCase):
         (source / 'requirements.yaml').write_text('id: ROOT\nchildren: []\n')
         return source
 
+    def final_report(self):
+        """Keep a CLI test from writing a report through a mocked compiler's path."""
+        writer = patch.object(main.final, 'write_report')
+        self.addCleanup(writer.stop)
+        return writer.start()
+
     def test_main_initializes_the_compiler_with_positional_requirement_path(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = self.source(root)
             output = root / 'output'
+            report = self.final_report()
             with patch.object(main, 'Compiler') as cls:
                 main.main([str(source), '--output-dir', str(output), '--model-log'])
             cls.assert_called_once_with(source.resolve(), output.resolve(), model_log=True, port=3000)
             cls.return_value.compile.assert_called_once_with()
+            # The mocked compiler still reaches the report step, which must not touch the disk here.
+            report.assert_called_once()
             self.assertFalse(output.exists())
             args = main.parse_args([str(source), '--output-dir', str(output)])
             self.assertEqual(args.requirement_path, source.resolve())
@@ -170,6 +179,7 @@ class CompilerCLI(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = self.source(root)
+            self.final_report()
             with patch.object(main, 'Compiler') as cls:
                 main.main([str(source), '-o', str(root / 'output'), '--port', '33042'])
             self.assertEqual(cls.call_args.kwargs['port'], 33042)
@@ -185,6 +195,7 @@ class CompilerCLI(unittest.TestCase):
             empty.mkdir()
             output_file = root / 'file'
             output_file.write_text('preserve')
+            self.final_report()
             for inputs, output in [(root / 'missing', root / 'output'), (empty, root / 'output'),
                     (source, source), (source, source / 'nested'), (source, output_file)]:
                 with self.subTest(inputs=inputs, output=output), patch.object(main, 'Compiler') as cls, redirect_stderr(StringIO()):
@@ -199,6 +210,7 @@ class CompilerCLI(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = self.source(root)
+            self.final_report()
             for failure, status in [(ValueError('failed test acceptance'), 1), (KeyboardInterrupt(), 130)]:
                 with self.subTest(status=status), patch.object(main, 'Compiler') as cls, redirect_stderr(StringIO()):
                     cls.return_value.current_stage = '08_implement_backend_tdd.py'

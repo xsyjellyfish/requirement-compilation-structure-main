@@ -1,6 +1,12 @@
 """Canonical UI/data records and incremental design updates."""
 
 from copy import deepcopy
+from re import compile as compile_pattern
+
+#: A template placeholder is not a literal name: ``text: "{book.title}"`` can never match the
+#: rendered control, so a name-bearing prop that still holds one is a design defect. Data-derived
+#: names belong in ``prop.name_from``; static wording must be written out.
+TEMPLATE_PLACEHOLDER = compile_pattern(r"[{][^{}]*[}]")
 
 
 
@@ -36,6 +42,22 @@ data is an array of VARIABLE NAMES, not variable objects. prop contains static t
 label, placeholder, input_type, options, style, href, alt or heading level. Optional
 prop.visible is a boolean or {var:VARIABLE_NAME, equals:VALUE}. Express business
 behavior through triggers later, not expression strings embedded in props.
+An image element copies a supplied reference image only when that image is page content: set
+prop.image to the supplied image ID and the compiler serves it at the URL given in the
+requirement evidence. A layout reference that you reproduce with real elements needs no image
+element, and a page never renders a whole reference screenshot in place of its controls.
+
+REQUIRED CONTROLS
+The request's required_controls lists the links, buttons and checkboxes that the wording of this
+requirement or of a parent requirement demands, each with its role, exact accessible name and
+href. Every listed control must exist on the pages this requirement uses, with that role, that
+exact name and, for a link, that exact href. A control marked inherited=true comes from a parent
+requirement and is never restated here: repeat it as shared header, navigation or footer content
+on this requirement's pages, because a visitor sees the parent's controls on every page beneath
+it. Do not rename a control, translate it, split its name across elements, wrap it in another
+control, or replace it with text, an icon alone or a link to another route. A control that is
+absent from the design cannot be recovered by a later stage.
+
 
 Design for executable user journeys, not just screenshots: every required WHEN must
 have a reachable page, actual control with stable element ID, writable binding if
@@ -44,8 +66,26 @@ navigation controls and appropriate signed-in/signed-out display states only whe
 required. Keep form field labels/types/options aligned with exact requirement text.
 Avoid duplicate pages, speculative controls, and display-only substitutes for actions.
 
-pages maps PAGE IDs to {name, route, root, images, fixtures}. route is a URL path, root
-is an ELEMENT ID, images lists supplied image IDs. fixtures maps display-state names
+ACCESSIBLE NAMES are how a user, a screen reader and an external black-box reviewer find and
+operate a control, so design them explicitly:
+- Every interactive element declares its accessible name: prop.label for input, select and
+  checkbox (the visible field label), prop.text for a button or link, or prop.name_from when
+  the name is a data value rather than literal text.
+- prop.name_from is a VARIABLE NAME whose value must BE that control's accessible name,
+  exactly and alone. Use it on the control that opens one record from a list, so every record
+  can be identified by its own name. Never design a record control that renders the name
+  together with a description, timestamp or another value: put those values on separate
+  elements beside it.
+- Keep one label per control and keep labels unique within one form; a duplicated or missing
+  label makes a field unaddressable.
+- Every form that can be rejected designs an alert element for the rejection, so the failure
+  is visible where the user is and never looks like success.
+
+pages maps PAGE IDs to {name, route, root, images, fixtures}. route is a URL path
+beginning with /, root is an ELEMENT ID, images lists supplied image IDs. Write a dynamic
+route segment as :name or {name}, for example /books/:bookName when the requirement opens a
+specific book; the running application matches such URLs, decodes their parameters and
+passes them to the page and its triggers. fixtures maps display-state names
 to variable overrides; include default={} plus representative states within max_fixtures.
 Bindings define defaults; fixtures only override them for display tests. Fixture state
 must not become an invented production API response. Use realistic default state;
@@ -108,6 +148,83 @@ def page_context(design: dict, pid: str) -> dict:
     variables.update(node.get("prop", {})["visible"]["var"] for node in elements.values() if isinstance(node.get("prop", {}).get("visible"), dict))
     return {"id": pid, **deepcopy(design["pages"][pid]), "elements": elements,
         "bindings": {var: deepcopy(design["bindings"][var]) for var in sorted(variables) if var in design["bindings"]}}
+
+
+def accessibility_problems(design: dict) -> list[dict]:
+    """Report design records that leave a control unaddressable by name.
+
+    An external acceptance reviewer locates controls by role and accessible name, so a design
+    that renders no name, or a name assembled from several values, cannot be verified without
+    guessing. The findings are diagnostics for the UI design/implementation, never a reason to
+    weaken a test.
+    """
+    problems = []
+    bindings = set(design.get("bindings") or {})
+    for uid, node in sorted((design.get("elements") or {}).items()):
+        prop = node.get("prop") or {}
+        templated = next((key for key in ("label", "text", "placeholder", "aria_label")
+            if isinstance(prop.get(key), str) and TEMPLATE_PLACEHOLDER.search(prop[key])), None)
+        if templated:
+            problems.append({"element": uid, "rule": "placeholder",
+                "reason": "prop." + templated + " keeps the unresolved placeholder "
+                    + prop[templated].strip() + ", so the control has no literal accessible name",
+                "fix": "Write the literal wording, or use prop.name_from when the name is a data value."})
+            continue
+        declared = prop.get("name_from")
+        if declared is not None:
+            if not isinstance(declared, str) or declared not in bindings:
+                problems.append({"element": uid, "rule": "name_from",
+                    "reason": "prop.name_from names no known binding",
+                    "fix": "Point prop.name_from at the binding whose value is the record's name."})
+            elif any(isinstance(prop.get(key), str) and prop[key].strip() for key in ("label", "text")):
+                problems.append({"element": uid, "rule": "name_from",
+                    "reason": "a control cannot take its accessible name from a value and from"
+                        " static text at the same time; the name becomes a concatenation",
+                    "fix": "Keep prop.name_from and render the static text in a separate element."})
+            continue
+        if node.get("type") in {"button", "link"} and not any(
+                isinstance(prop.get(key), str) and prop[key].strip() for key in ("label", "text", "placeholder")):
+            problems.append({"element": uid, "rule": "access_name",
+                "reason": "this " + str(node.get("type")) + " has no accessible name, so no user or"
+                    " reviewer can identify it",
+                "fix": "Declare prop.text for its visible wording, or prop.name_from when the name is data."})
+    for pid in sorted((design.get("pages") or {})):
+        for uid, node in sorted(page_elements(design, pid).items()):
+            if node.get("type") != "form":
+                continue
+            labels = [str((child.get("prop") or {}).get("label") or "").strip()
+                for child in elements_of(design, uid).values()]
+            duplicates = sorted({label for label in labels if label and labels.count(label) > 1})
+            if duplicates:
+                problems.append({"element": uid, "rule": "label",
+                    "reason": "the form repeats the label(s) " + ", ".join(duplicates)
+                        + ", so a field cannot be addressed by its label",
+                    "fix": "Give every field a unique visible label."})
+    return problems
+
+
+def accessibility_findings(design: dict, uids) -> list[dict]:
+    """Report the accessibility defects inside the subtree a proposal just wrote.
+
+    Scoping to the written subtree keeps a fresh proposal from being rejected for a control it
+    never touched: the pass that wrote that control already had to satisfy the same contract,
+    and re-reporting it here would loop a repair against an unrelated page.
+    """
+    scoped = set(uids)
+    for uid in list(scoped):
+        scoped.update(elements_of(design, uid))
+    return [problem for problem in accessibility_problems(design) if problem["element"] in scoped]
+
+
+def elements_of(design: dict, uid: str) -> dict:
+    """Return the subtree below one element, excluding the element itself."""
+    selected = {uid}
+    while True:
+        expanded = selected | {child for child, node in (design.get("elements") or {}).items()
+            if node.get("parent") in selected}
+        if expanded == selected:
+            return {child: design["elements"][child] for child in expanded - {uid}}
+        selected = expanded
 
 
 def owners(design: dict, pid: str) -> list[str]:

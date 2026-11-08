@@ -23,7 +23,7 @@ def editable_sources(output: Path, root: str) -> list[str]:
     """Allow source repairs across the layer while retaining compiler-owned wiring."""
     templates = Path(__file__).resolve().parents[1] / "project/templates"
     generated = {"backend/src/api/register.ts", "frontend/src/ui-runtime.ts",
-        "frontend/src/ui-api.ts", "frontend/src/ui-triggers.ts"}
+        "frontend/src/ui-router.ts", "frontend/src/ui-api.ts", "frontend/src/ui-triggers.ts"}
     return [relative for relative in source_paths(output, root)
         if relative not in generated and not (templates / relative).is_file()
         and not relative.startswith("backend/src/db/")]
@@ -38,6 +38,9 @@ class FileWorkspace:
         self.files = self.writable | set(references)
         self.observed = {}
         self.changed_paths = set()
+        # The paths one round edited, so a gate can tell a local edit from a shared one.
+        # ``changed_paths`` is cumulative and cannot answer that question.
+        self.round_changed = set()
         self.new_file = new_file
         self.target = new_file
         for path in self.files:
@@ -95,6 +98,7 @@ class FileWorkspace:
 
     def state(self) -> dict:
         """Refresh all supplied contents before each model request."""
+        self.round_changed = set()
         self.observed = {path: read_source(self.path(path)) if self.path(path).is_file() else None
             for path in sorted(self.files)}
         return {path: {"content": content, "writable": path in self.writable}
@@ -142,6 +146,7 @@ class FileWorkspace:
                     save_bytes(self.path(relative), originals[relative])
             raise
         self.changed_paths.update(staged)
+        self.round_changed.update(staged)
         if created is not None:
             self.writable.add(created)
             self.files.add(created)

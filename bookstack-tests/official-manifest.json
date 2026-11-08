@@ -1,0 +1,308 @@
+{
+    "source":  {
+                   "repository":  "https://github.com/code-philia/arc-bench",
+                   "app":  "bookstack",
+                   "commit":  "e59696bbc68578c3b3da1ad47f9a0ac07e581184",
+                   "commitDate":  "2026-11-03T10:45:50Z",
+                   "archive":  "https://codeload.github.com/code-philia/arc-bench/tar.gz/e59696bbc68578c3b3da1ad47f9a0ac07e581184",
+                   "paths":  [
+                                 "arc-bench/bookstack/requirements",
+                                 "arc-bench/bookstack/tests",
+                                 "setup-playwright.ps1",
+                                 "setup-playwright.cjs",
+                                 "setup-playwright.sh"
+                             ],
+                   "recordedAt":  "2026-11-06T14:08:22Z"
+               },
+    "fileCount":  48,
+    "files":  [
+                  {
+                      "path":  "requirements/reference/book.png",
+                      "bytes":  547679,
+                      "sha256":  "e249cb0c1e3bfffb1527d87cc1de2040c51455e5216b932cc08adad4b91e2939",
+                      "gitBlobSha":  "186c9b6be5559fb3e990522515780633f50360e2"
+                  },
+                  {
+                      "path":  "requirements/reference/books.png",
+                      "bytes":  2975274,
+                      "sha256":  "807f9a50f27c0af19d21d97a4dbf6814d6fa28dd08a81faf61e697413756be9b",
+                      "gitBlobSha":  "06c1284a65c7a09666aa64fc3f1925f8225b2895"
+                  },
+                  {
+                      "path":  "requirements/reference/chapter.png",
+                      "bytes":  402415,
+                      "sha256":  "52996f9b66f9036806eb509198192967888f1b0e9ca11cb51e07456e2f6ab886",
+                      "gitBlobSha":  "830c7c7f6ef8a394c1de128f2a132def1e143bb0"
+                  },
+                  {
+                      "path":  "requirements/reference/create_book.png",
+                      "bytes":  219459,
+                      "sha256":  "c75c0a552d1252e5006ccea0a5e9f8f6de7d881afec59bb00810d1c670a551a4",
+                      "gitBlobSha":  "c5a31198f7bba36c01b436cab5e03d87885d5747"
+                  },
+                  {
+                      "path":  "requirements/reference/create_chapter.png",
+                      "bytes":  205424,
+                      "sha256":  "a37c8e4dc437b70aecad820bc87d12a5b2da9e704dda8c86061ad4819f230e4a",
+                      "gitBlobSha":  "0f1afa59239ee96fc06cda3fc6525fdc1115962b"
+                  },
+                  {
+                      "path":  "requirements/reference/create_shelf.png",
+                      "bytes":  481295,
+                      "sha256":  "01a3c040df09735f433144e3dc7aecffee0ec12222c8c7f1d5df143b49113c67",
+                      "gitBlobSha":  "bff15ce311547d692d240dfa078a4d3b3f525593"
+                  },
+                  {
+                      "path":  "requirements/reference/delete_book.png",
+                      "bytes":  217411,
+                      "sha256":  "7b18c9786712346576ccf610d76f6376a97dda10de4adec70ac5c82a64456656",
+                      "gitBlobSha":  "3b7d21ee4589bdda0824535578479ff635dd7417"
+                  },
+                  {
+                      "path":  "requirements/reference/delete_draft.png",
+                      "bytes":  193485,
+                      "sha256":  "d10e45507b85d437ba5c88bc3daacb5817dd64ba9ce007ed2caeaa6985d39ad9",
+                      "gitBlobSha":  "ac2178efa55d3bd5f19db31d9abe73a865eb8cc2"
+                  },
+                  {
+                      "path":  "requirements/reference/delete_shelves.png",
+                      "bytes":  211032,
+                      "sha256":  "b3a1631c71d592fa169c43b7e6f54807716ca841bb3896fc84388d0e187fb1d0",
+                      "gitBlobSha":  "e1262849fe173b96d67905f739277f221f7b6c5c"
+                  },
+                  {
+                      "path":  "requirements/reference/edit_book.png",
+                      "bytes":  379746,
+                      "sha256":  "bee1640fa285e215c972c5e3879a0a106651d767667d9af16a1f05a3242bd500",
+                      "gitBlobSha":  "2eab07d1842b13302aacf56b41aa3b358083595b"
+                  },
+                  {
+                      "path":  "requirements/reference/edit_shelve.png",
+                      "bytes":  316727,
+                      "sha256":  "0f429ee5bdce44c6d01748a6a2ab03d8057160433e189900412375a338ef3e68",
+                      "gitBlobSha":  "260d20d5304e156996dbcdcb2bd716ecd6072e5b"
+                  },
+                  {
+                      "path":  "requirements/reference/favourites.png",
+                      "bytes":  261949,
+                      "sha256":  "e5a7125f5ec07f2f7d7dae867fbc6340987e61f2d8266fee8808fafe75926ddf",
+                      "gitBlobSha":  "59c6825dda54ae78513af33a660c6118770f8e37"
+                  },
+                  {
+                      "path":  "requirements/reference/index.png",
+                      "bytes":  1223936,
+                      "sha256":  "1737c12c566012b851f64239ae8d8a20fa1dfc1f3d45e3d1a105d7a3c8a13a62",
+                      "gitBlobSha":  "e0b529497648444d3d2b980cb65a10f5a131dd30"
+                  },
+                  {
+                      "path":  "requirements/reference/index_after_login.png",
+                      "bytes":  556545,
+                      "sha256":  "09f6a3dad77591471190c8a3346672bdcccb8309a93264cc660b6281cb16ecd7",
+                      "gitBlobSha":  "c04ee5ecdaf825670bcfdecd93a71fc2fe957e21"
+                  },
+                  {
+                      "path":  "requirements/reference/login.png",
+                      "bytes":  1027659,
+                      "sha256":  "c503363641069a2a920364036ca2427dbe8628b07f439233d71d152386b7b525",
+                      "gitBlobSha":  "e26a622b647b56ec9c0308288b7f39caf431a098"
+                  },
+                  {
+                      "path":  "requirements/reference/page.png",
+                      "bytes":  1139125,
+                      "sha256":  "59f3d0c184fa708d8c1e3373f32756c66a5c9d5c1e43ac2ac58a002ce9eb2e9b",
+                      "gitBlobSha":  "535f23ef0e08071d8e62a45c2fbc83eb6891b143"
+                  },
+                  {
+                      "path":  "requirements/reference/page_draft.png",
+                      "bytes":  221649,
+                      "sha256":  "9619f79f4d56d2aecfb8fc40798150896cc6931924d685d1eb09f41d663ea9fe",
+                      "gitBlobSha":  "28ae1359d2d2a1e7d07465129ad13ad16ded3a09"
+                  },
+                  {
+                      "path":  "requirements/reference/shelf.png",
+                      "bytes":  885419,
+                      "sha256":  "aa0a645b3b0cb224838c79573fb9c113cf2537ea4af01f3773a6d7f24eb145e0",
+                      "gitBlobSha":  "a276948b4df891e98f8ca7e023c59dae2bec8e88"
+                  },
+                  {
+                      "path":  "requirements/reference/shelves.png",
+                      "bytes":  1748769,
+                      "sha256":  "6c7d52cd796db8420eda0dbeaa48f657d0aff3c9d5595067c454fe32224d1401",
+                      "gitBlobSha":  "92bc786ac855ae3ea0235986996fa02b052f3175"
+                  },
+                  {
+                      "path":  "requirements/requirements.yaml",
+                      "bytes":  51599,
+                      "sha256":  "8189d63bbffef9e873d3c27589dbe26532f44afa2d485d3e9d1d8c593f7e7274",
+                      "gitBlobSha":  "5cf1216a2c67fb200474962ada866fdc5be00c6b"
+                  },
+                  {
+                      "path":  "setup-playwright.cjs",
+                      "bytes":  2630,
+                      "sha256":  "6bd3e03d8e7daa7c7b46a74cdeccd4a6a2ce448440d690c7fb501ef20a4d4840",
+                      "gitBlobSha":  "98fd3b7bada37942fee4e9ae6bd0beb70c1890d8"
+                  },
+                  {
+                      "path":  "setup-playwright.ps1",
+                      "bytes":  2665,
+                      "sha256":  "94083d86049c7b43f73e724a9966528a7af34021b95bc328e900eab01d0cde95",
+                      "gitBlobSha":  "341a16281aeacefc7d0c6c15bb8c95f245603bc1"
+                  },
+                  {
+                      "path":  "setup-playwright.sh",
+                      "bytes":  1904,
+                      "sha256":  "334ec9b72ef6e3685811807f2a526db03d057a6eca3e54d85edcf9e9c1161a35",
+                      "gitBlobSha":  "6209b72b5dfd600afe0d9bd7f23064e9a933c876"
+                  },
+                  {
+                      "path":  "tests/helpers.ts",
+                      "bytes":  5676,
+                      "sha256":  "502214a60db49215ebe965134f85eb24e8c8c600e65583678f7217fb0764769c",
+                      "gitBlobSha":  "a14992aacfe08d0ef21ffd23f4c295491194f3b7"
+                  },
+                  {
+                      "path":  "tests/REQ-1.1.spec.ts",
+                      "bytes":  327,
+                      "sha256":  "dc6d869bf15bc528d7b4bb42ef4c1233d7b7bf94dec27664275fc19d4337e4fb",
+                      "gitBlobSha":  "fa4f1512a6ab202f128b90dc993e400788825bb8"
+                  },
+                  {
+                      "path":  "tests/REQ-1.2.spec.ts",
+                      "bytes":  404,
+                      "sha256":  "1c9adc5389dfad729881888facca2df6f07dcc72d9a0687f8892c293e7c8662a",
+                      "gitBlobSha":  "8618025f93aed3f7c393abd4202dd6f4c7a8a8df"
+                  },
+                  {
+                      "path":  "tests/REQ-2.1.spec.ts",
+                      "bytes":  590,
+                      "sha256":  "0ed493937b461c4c0713b209836405856f278c0a509f3ef116e931b0097236e2",
+                      "gitBlobSha":  "5ed38cd0764b1d77cf28acd7e76e936e92df1356"
+                  },
+                  {
+                      "path":  "tests/REQ-2.2.spec.ts",
+                      "bytes":  374,
+                      "sha256":  "57fa65987d09b8adef287e026556495eb19b41cb3c2c5adc105d34f28eea3e99",
+                      "gitBlobSha":  "45dd23708c105774b7594a87590a27985d7ef2ba"
+                  },
+                  {
+                      "path":  "tests/REQ-3.1.spec.ts",
+                      "bytes":  467,
+                      "sha256":  "141563ab2559a411b487b4b83687a09addf904e4a66d386ee037e80fa998f9c0",
+                      "gitBlobSha":  "a1e0a90496c56ae2850304d4be018746c84de986"
+                  },
+                  {
+                      "path":  "tests/REQ-4.1.spec.ts",
+                      "bytes":  448,
+                      "sha256":  "804d57f60848195e435625ee26d9179e4814365f6070f3914edb60ef72017c0b",
+                      "gitBlobSha":  "c4cd47089b410746eabf2c448bf729841a5910ba"
+                  },
+                  {
+                      "path":  "tests/REQ-4.2.spec.ts",
+                      "bytes":  450,
+                      "sha256":  "50896442013b5804dd43600c313c82d281669f2404f77eaf495512558cb0b3e5",
+                      "gitBlobSha":  "e932c70c9424270f10a0969a7b7d99a86d478b46"
+                  },
+                  {
+                      "path":  "tests/REQ-4.3.spec.ts",
+                      "bytes":  1098,
+                      "sha256":  "98e4113ad355a848f86d1f73ce2c6b79dd046a8dcf9dc43356037bb71f83026e",
+                      "gitBlobSha":  "f85fa92bb19d8d93d9ce5a5fbc62e8b4a845692a"
+                  },
+                  {
+                      "path":  "tests/REQ-4.4.spec.ts",
+                      "bytes":  1083,
+                      "sha256":  "b79cd84633c1e1ceebc705635eac06eba629e6a1845a8fef4de8fe4f88fb0752",
+                      "gitBlobSha":  "af5ab8ec7214a37257cc2e5f9cef4dce8c17bf49"
+                  },
+                  {
+                      "path":  "tests/REQ-4.5.spec.ts",
+                      "bytes":  1714,
+                      "sha256":  "8e62aa83ef4e01fa0c6eef3cc5d5e2ebe1f0a2adc80e946949b65d3c602653ea",
+                      "gitBlobSha":  "e3ed6ce6439088f095c5344f9ed148bef77d8624"
+                  },
+                  {
+                      "path":  "tests/REQ-5.1.spec.ts",
+                      "bytes":  442,
+                      "sha256":  "c2de78f4171f63933adfbe35d5743ae7b38cde4a9ad254d453631f351a318786",
+                      "gitBlobSha":  "7807a131eb9cbdb4d999cf686d385d6bf5a98563"
+                  },
+                  {
+                      "path":  "tests/REQ-5.2.spec.ts",
+                      "bytes":  950,
+                      "sha256":  "520b97c336e316e15a6a5a1fc8fd3436bab3b9f690575c7629467c5fbf09c0c7",
+                      "gitBlobSha":  "9705ebc98089988d32f02a157a21bae770454c78"
+                  },
+                  {
+                      "path":  "tests/REQ-5.3.spec.ts",
+                      "bytes":  1066,
+                      "sha256":  "28d8da95c78fa561302f009c66458540a3e7552e95c89e595f080f9664adf4de",
+                      "gitBlobSha":  "5f215b3ee315ed5f5b4c28b3cec66b84ec2e5cf6"
+                  },
+                  {
+                      "path":  "tests/REQ-5.4.spec.ts",
+                      "bytes":  1680,
+                      "sha256":  "9ff695eac89b112565d278bab04d1900af88145cf000c87ac64bb504f865600d",
+                      "gitBlobSha":  "5e5ed5dc0415bdca46671f780d3e1ae6ec03a8d6"
+                  },
+                  {
+                      "path":  "tests/REQ-5.5.spec.ts",
+                      "bytes":  1068,
+                      "sha256":  "ff91e97e888568bceb1604233596feb3569f56c8440de427bc9ad10bec6b4759",
+                      "gitBlobSha":  "7e4ad7c86c53cd5dd0e7a239c9c23c6fe4e40d68"
+                  },
+                  {
+                      "path":  "tests/REQ-5.6.spec.ts",
+                      "bytes":  617,
+                      "sha256":  "b359675e682e8adbc6f6ac84583c76af65d4cf992d0e8ee7f17bb071b69560c2",
+                      "gitBlobSha":  "ae8b5c383ba28909e143d736f8efc4aa1ffd2479"
+                  },
+                  {
+                      "path":  "tests/REQ-6.1.spec.ts",
+                      "bytes":  1047,
+                      "sha256":  "e4c612a85aca69ad393f4ee6f3dda1268121a23e66f09699e52aeb55a4270f76",
+                      "gitBlobSha":  "407da5b616a21a7252170897ed1ba49c97b7ceeb"
+                  },
+                  {
+                      "path":  "tests/REQ-6.2.spec.ts",
+                      "bytes":  774,
+                      "sha256":  "0eae57de816d8db94f0ca831d706413be33543922550982a2d36fb27c1eb7037",
+                      "gitBlobSha":  "442fd8b0ea237d7268d3e201580a94659b07c4bf"
+                  },
+                  {
+                      "path":  "tests/REQ-6.3.spec.ts",
+                      "bytes":  944,
+                      "sha256":  "088ef09c3e8b14275651c905214eeea6bef9f5c9499d125110adcd6ac76dc8e1",
+                      "gitBlobSha":  "38adf741de6737d68c9c8e2570dc39c24ada7895"
+                  },
+                  {
+                      "path":  "tests/REQ-6.4.spec.ts",
+                      "bytes":  1261,
+                      "sha256":  "5a05c49c14ca9a48d6b54d66cea41e878de42349b2fd4df024574e866f544c6d",
+                      "gitBlobSha":  "2b61b705669878deb7c3415816a9d33bcd5592cc"
+                  },
+                  {
+                      "path":  "tests/REQ-7.1.spec.ts",
+                      "bytes":  1069,
+                      "sha256":  "b4190fe9364652188a603c360504c5a9ab6e12ce053a5802c6585ef926cabcf4",
+                      "gitBlobSha":  "b096018ea292460117d121f583258d315c727132"
+                  },
+                  {
+                      "path":  "tests/REQ-8.1.spec.ts",
+                      "bytes":  1355,
+                      "sha256":  "cf87827845d9c66d505b0caa8b39989e21196ae353b3edb86f621f86ccb20593",
+                      "gitBlobSha":  "997ea5c42bc0f56b2813e61f20b27c8762ed0d5d"
+                  },
+                  {
+                      "path":  "tests/REQ-8.2.spec.ts",
+                      "bytes":  688,
+                      "sha256":  "23474778718e91b5f0d07784ac75c9c4828f5ce4dab58a118e9ef3dd00b205e6",
+                      "gitBlobSha":  "0015ffa4e15f6b6e6658c7011dc192ce20e1ab42"
+                  },
+                  {
+                      "path":  "tests/REQ-9.1.spec.ts",
+                      "bytes":  766,
+                      "sha256":  "2a4f8d0bff7aac1f312496d9441cfd028100dbb24fc1c60d8fc5fe47b4926db3",
+                      "gitBlobSha":  "2e28044a1fee4c0a1463e3e61256f416e9786fad"
+                  }
+              ]
+}

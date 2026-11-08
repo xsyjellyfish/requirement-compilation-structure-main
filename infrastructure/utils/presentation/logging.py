@@ -22,6 +22,26 @@ def session_info():
     return _session.get()
 
 
+def model_usage() -> dict:
+    """Return this stage's recorded model usage as JSON-safe totals and per-task rows.
+
+    Stages persist this next to their own report, so one requirement's tokens, reasoning
+    and latency can be reviewed later without replaying the run or parsing the log.
+    """
+    stats = (_session.get() or {}).get("model_stats") or {}
+    if not stats:
+        return {}
+    return json.loads(json.dumps(stats, default=str))
+
+
+def model_tokens_used() -> int:
+    """Return the reported prompt and completion tokens of this stage so far."""
+    stats = (_session.get() or {}).get("model_stats") or {}
+    if isinstance(stats.get("Total"), int):
+        return stats["Total"]
+    return (stats.get("Input") or 0) + (stats.get("Output") or 0)
+
+
 def full_detail(title: str, body: str) -> None:
     """Keep full panel content in the log without flooding the terminal."""
     session = _session.get()
@@ -99,6 +119,10 @@ def console_log(output_dir: Path, *, debug_model_io: bool = False, model_log: bo
                 show_panel(f"[FAILED] {stage_label(script)}", f"Stopped after {monotonic() - started:.1f}s", tone="error")
                 raise
             else:
+                # The task breakdown is the only place a run states which requirement, page
+                # or API spent the tokens; it is printed after the last call, not per call.
+                from infrastructure.utils.presentation.model_io import show_call_totals
+                show_call_totals()
                 show_panel(f"[DONE] {stage_label(script)}", f"Completed in {monotonic() - started:.1f}s", tone="success")
             finally:
                 stdout.flush()

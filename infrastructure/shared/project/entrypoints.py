@@ -11,20 +11,46 @@ from infrastructure.utils.files import save_json
 FILE_ROOTS = {"api": "backend/src", "page": "frontend/src", "trigger": "frontend/src",
     "backend_test": "backend/tests", "e2e_test": "frontend/tests/e2e"}
 
+INDEX = ".arc/implementation_paths.json"
+# Reading the index is a deterministic parse of one small file. Repair loops ask for it
+# many times per round, so the parsed value is reused until the file changes on disk.
+_CACHE: dict[tuple[str, int, int], dict] = {}
+
+
+def _index(output: Path) -> dict:
+    """Return the parsed path index, re-reading only when the file on disk changed."""
+    path = output / INDEX
+    try:
+        status = path.stat()
+    except OSError:
+        return {}
+    key = (str(path), status.st_mtime_ns, status.st_size)
+    if key not in _CACHE:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        if len(_CACHE) > 64:
+            _CACHE.clear()
+        _CACHE[key] = value
+    return _CACHE[key]
+
 
 def selected_path(output: Path, kind: str, identity: str) -> str | None:
     """Read the implementation path selected for a model ID."""
-    index = output / ".arc/implementation_paths.json"
-    paths = json.loads(index.read_text(encoding="utf-8-sig")) if index.is_file() else {}
+    paths = _index(output)
     return paths.get(kind, {}).get(identity)
 
 
 def remember_path(output: Path, kind: str, identity: str, relative: str) -> None:
     """Persist the implementation path for a target without model response metadata."""
-    index = output / ".arc/implementation_paths.json"
-    paths = json.loads(index.read_text(encoding="utf-8-sig")) if index.is_file() else {}
+    path = output / INDEX
+    paths = json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
     paths.setdefault(kind, {})[identity] = relative
-    save_json(index, paths)
+    save_json(path, paths)
+    _CACHE.clear()
 
 
 def implementation_entrypoint(output: Path, kind: str, identity: str) -> dict | None:
