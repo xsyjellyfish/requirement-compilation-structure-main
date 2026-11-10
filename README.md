@@ -1,346 +1,64 @@
-# Requirement Compiler
+# mini-SWE-agent → ARC-Bench adapter
 
-Compile `requirements.yaml` and reference images into a React + Express + SQLite application through 13 passes: requirements, database schema and obligations, backend APIs and tests, UI, and frontend triggers with end-to-end tests. Intermediate artifacts are saved under the output directory's `.arc/` folder.
+围绕**未改动的 [mini-SWE-agent](https://github.com/SWE-agent/mini-swe-agent) v2.4.6**（PyPI 安装，不 vendor 源码）做的 ARC-Bench 提交适配层：逐字读取 `requirements.yaml` 与参考图片，多模态注入 prompt，从 `web_template/` 阶段化 React/Vite + Express + SQLite 起始项目，由上游 agent 用 bash 工具实现应用。
 
-## Environment
+- ARC-Bench: https://github.com/code-philia/arc-bench；Runner 约定：`python main.py <requirements目录> --output-dir <应用目录>`，ZIP 根含 `main.py` + `requirements.txt`
+- 历史诊断与变更记录：[docs/history.md](docs/history.md)
 
-Install [Python 3.11+](https://www.python.org/downloads/), [Node.js 22.12+ with npm](https://nodejs.org/en/download), and [uv](https://docs.astral.sh/uv/getting-started/installation/). Ensure `node`, `npm`, and `uv` are available in your terminal; reopen it after installation.
+## 状态
 
-Run from the repository root using your platform's shell.
+入口、模板启动、离线传输与回归测试已验证（16 passed）。完整 Keep baseline 未跑通：模型端点在长输出阶段断连（httpx `RemoteProtocolError`），诊断见 docs/history.md。得分 N/A / 33（未运行）。
 
-**Windows (PowerShell)**
-
-```powershell
-uv sync
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-uv run playwright install chromium
-```
-
-**macOS / Linux (bash or zsh)**
+## 安装
 
 ```bash
-uv sync
-if [ ! -f .env ]; then cp .env.example .env; fi
-uv run playwright install chromium
+unzip mini_swe_arcbench_adapter.zip -d mini_swe_arcbench_adapter
+cd mini_swe_arcbench_adapter
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install -r requirements.txt
+mini --help   # 上游 CLI 仍可用
 ```
 
-On supported Debian/Ubuntu Linux systems, use `uv run playwright install --with-deps chromium` instead to also install browser system dependencies; this may require sudo.
+Python 3.11+（3.13 实测），Node.js 22.12+，Windows 用 WSL2。端点须支持 tool calling + 图片输入（LiteLLM `openai/<model>` provider）。
 
-If npm needs to compile native dependencies such as `better-sqlite3`, install the platform's build tools:
-
-| Platform | Build tools |
-| --- | --- |
-| Windows | Visual Studio Build Tools with **Desktop development with C++**, plus Python available to npm. |
-| macOS | Xcode Command Line Tools: `xcode-select --install`. |
-| Linux | Python, make, and a C++ compiler; on Debian/Ubuntu: `sudo apt-get install python3 build-essential`. |
-
-Set `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `MODEL` in `.env`. Use a model that accepts image input.
-
-## Run
-
-The input directory must contain `requirements.yaml` and its referenced images. The examples use `input/` and write the generated application to `outputs/demo/`. The commands below work in PowerShell, bash, and zsh.
-
-### Full pipeline
+## 运行
 
 ```bash
-uv run main.py input --output-dir outputs/demo
+cp .env.example .env   # 填 OPENAI_BASE_URL / OPENAI_API_KEY；shell 环境变量优先于 .env
+python main.py <requirements目录> --output-dir <应用目录> --dry-run   # 不花 API：校验输入、模板、多模态准备
+python main.py <requirements目录> --output-dir <应用目录>             # 真实生成
+PORT=3000 bash <应用目录>/deploy.sh                                    # 前台启动，期间保持运行
+bash scripts/run_keep_baseline.sh <arc-bench克隆> <全新空输出目录>      # 生成→部署→官方 Playwright 测试 一键
 ```
 
-Add `--model-log` to display and save detailed model input/output, or `--port 33000` to change the backend port (default: 3000). Token usage and model latency are always shown.
+模型优先级：`--model` > `ARC_MODEL` > `MODEL` > `deepseek-flash`。
+环境变量：`ARC_REQUEST_TIMEOUT`（秒，默认 600）、`MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT`（默认 100——网关错误通常不计费且失败即损失全部进度，最坏情形 ~6.6 小时重试直到平台/网关恢复）、`ARC_MAX_STEPS`（默认 250，沿用上游 swebench 配置）、`ARC_MAX_SECONDS`（3600）、`ARC_REASONING_EFFORT`（默认 `low`，传给端点的思考力度，设空省略该参数）、`ARC_TRANSPORT_REASONING`（`passthrough` 默认，按上游原样回传思考内容——DeepSeek 契约与重编码网关需要；`strip` 为显式剥离，仅在确认端点不需要且窗口/计费敏感时使用）、`ARC_LOG_IMAGES`（默认剥离审计产物中的图片 base64，`=1` 保留原图用于图片相关调试）。
 
-### Step by step
+Prompt 架构：harness 契约逐字沿用上游 `config/benchmarks/swebench.yaml`（system、instance 骨架、输出截断、format error、`drop_params`/`parallel_tool_calls`、step_limit 250）与 `config/default.yaml` 的 shell 环境（`PAGER=cat` 等）；本仓库只承载任务域内容（YAML、参考图、禁区、提交标记）。参考图附加前自动缩至 ≤1280px 并按更小的 JPEG/PNG 重编码（实测 19 张 13.2MB → 1.0MB，规避网关 413 请求体上限；原图在 `.arc_requirements/` 不变）。
 
-Run these commands in order. They call the same 13 passes with the same default settings as `main.py`. Step 01 uses `--no-browse` to match the non-interactive pipeline.
+## 日志（记在哪、有什么）
+
+| 产物 | 内容 |
+|---|---|
+| stdout 单行 JSON（实时 flush） | 阶段事件：导入、初始化、任务准备、每次请求 `model_request_start/end`（耗时、finish_reason、**usage**）、bash 元数据、脱敏异常链 |
+| `<output>/.arc_adapter/calls.jsonl` | 每次 HTTP 尝试一行：耗时、finish_reason、完整 usage，或失败异常链 |
+| `<output>/.arc_adapter/payloads.jsonl` | append-only 增量日志（`prefix_len` + `append`），按序折叠可重建每次尝试发出的**字节级** payload（`scripts/reconstruct_payload.py`）；图片以 sha256 占位符剥离，可由 `.arc_requirements/` 原图确定性还原 |
+| `<output>/.arc_adapter/trajectory.json` | 上游完整消息历史：每个 prompt（含 base64 图片）、每个响应 dump（含 reasoning 思考原文）、每条 bash 命令与输出；每步落盘，run 结束后图片同样剥离 |
+| `<output>/.arc_adapter/run_summary.json` | status、llm_calls（逻辑调用）、model_http_attempts、token 聚合（成功尝试）、错误链 |
+
+失败请求没有 usage（服务端未返回），token 聚合只覆盖成功尝试；`actual_api_cost_usd` 恒为 `null`（端点定价未知）。
+
+## 上传
+
+`python scripts/package_agent.py` → `dist/mini_swe_arcbench_adapter.zip`（源码白名单，无密钥/venv/node_modules）。以 Python agent 类型上传，表单 Base URL/Key 映射到 `OPENAI_BASE_URL`/`OPENAI_API_KEY`。
+
+## 测试（不花 API）
 
 ```bash
-uv run 00_project_initialization.py --input input --output outputs/demo
-uv run 01_explore_requirement.py --input input --output outputs/demo --no-browse
-uv run 02_build_db_schema.py --input input --output outputs/demo
-uv run 03_infer_db_obligations.py --input input --output outputs/demo
-uv run 04_check_db_obligations.py --input input --output outputs/demo
-uv run 05_implement_db.py --input input --output outputs/demo
-uv run 06_design_backend_apis.py --input input --output outputs/demo
-uv run 07_check_backend_apis.py --input input --output outputs/demo
-uv run 08_implement_backend_tdd.py --input input --output outputs/demo
-uv run 09_design_ui.py --input input --output outputs/demo
-uv run 10_implement_ui.py --input input --output outputs/demo
-uv run 11_design_frontend_triggers.py --input input --output outputs/demo
-uv run 12_implement_frontend_tdd.py --input input --output outputs/demo
+python -m pip install pytest
+python -m pytest -q   # 本地回环 HTTP mock：CLI 成功/断连、calls.jsonl、payload 快照、脱敏
 ```
 
-For individual steps, add `--pause` for teaching pauses or `--debug-model-io` for detailed model I/O. Set a custom backend port with `--port` in step 00.
+## 安全
 
-### Start the generated application
-
-```bash
-cd outputs/demo
-npm run db:init
-npm run build
-npm start
-```
-
-Open `http://localhost:3000` (or the port you selected).
-
-## Backend test layers
-
-Step 08 keeps two independent suites for the generated backend, and both gate acceptance.
-
-| Layer | Path | What it proves |
-| --- | --- | --- |
-| Handler contract | `backend/tests/<requirement>/<API>.test.ts` | Business behavior of one API function, called directly with `(request, connection)` and a fresh in-memory SQLite database. |
-| HTTP integration | `backend/tests/http/<requirement>/<API>.http.test.ts`, `backend/tests/http/flows/crud.test.ts` | That the same behavior is reachable over HTTP: real `createApp(connection)` on an ephemeral port, real `registerApis` routing, real JSON body parsing and real status codes. |
-
-The HTTP harness (`backend/tests/support/http.ts`) is compiler-owned and regenerated by step 08; it is never imported by a handler. Each test creates its own `:memory:` database, so nothing touches `backend/data/app.db` and no test depends on another test's data.
-
-Per API, the emitted probes assert that:
-
-- the declared `method` and `path` reach a registered Express route (an unregistered route, a wrong verb or a renamed path parameter falls through to the `Unknown API route` fallback and fails);
-- a method that the contract does not declare on that template is **not** routed;
-- a `GET` with path parameters rejects an identifier that cannot exist with a documented error status, so the parameter really reaches the handler;
-- a write API rejects a request with missing required fields using a documented status and leaves every table unchanged.
-
-The CRUD flow suite derives chains from the IR path structure and replays them over HTTP, asserting status, body and database effects: `POST /api/books` → `GET /api/books` → `GET /api/books/{title}` → `PATCH /api/books/{title}/metadata` → `DELETE /api/books/{title}` → `GET` again (must not succeed). Nested resources such as `POST /api/books/{bookTitle}/pages` and `GET /api/books/{bookTitle}/pages/{pageTitle}` are reached with the identifiers created earlier in the same flow. When a derived example payload is legitimately rejected (for example an auth API that needs fields the contract cannot derive), the flow stops with a diagnostic instead of a false failure.
-
-Results are written to `.arc/backend_tdd.json`:
-
-```json
-"http": {
-  "support": "backend/tests/support/http.ts",
-  "flows": { "file": "backend/tests/http/flows/crud.test.ts", "resources": ["/api/books"], "steps": 6, "status": "GREEN" },
-  "apis": { "API-create-book": { "file": "backend/tests/http/REQ-A/API-create-book.http.test.ts", "probes": 3, "tests": 3, "pass": 3, "fail": 0 } },
-  "summary": { "tests": 9, "pass": 9, "fail": 0 }
-}
-```
-
-Run them yourself in a generated project (no model call, no network):
-
-```bash
-cd outputs/demo
-npm run test:backend                     # every handler suite plus every HTTP suite
-node --import tsx --test backend/tests/http/flows/crud.test.ts
-```
-
-Run the compiler's own unit tests from the repository root:
-
-```bash
-python -m unittest discover -s tests -t tests -p "test_*.py"
-```
-
-## Frontend API contract
-
-Step 12 writes trigger code against the accepted API model, so a passing browser suite is
-not enough: the request itself must be the operation the contract declares. A trigger can
-otherwise "work" by inventing a private parameter, for example `GET /api/books?detailTitle=`
-instead of `GET /api/books/{title}`, `POST /api/books?deleteTitle=` instead of
-`DELETE /api/books/{title}`, or `POST /api/books?createPageFor=` instead of
-`POST /api/books/{bookTitle}/pages`. Those requests are rejected before acceptance, and the
-repair loop receives the exact field, API and fix.
-
-`infrastructure/stages/frontend/triggers/contracts.py` parses every `context.api(...)` call
-in the generated frontend sources and compares it with `.arc/backend_apis.json`.
-
-| Rule | Rejected example | Feedback |
-| --- | --- | --- |
-| The API ID must be a string literal of the accepted contract | ``context.api(`API-${op}`)``, `context.api("API-book-detail")` | `api_id` problem naming the accepted IDs |
-| The trigger may only call the APIs its own designed actions name | detail trigger calling `API-list-books` | `api` problem listing the designed API |
-| `params` must be exactly the path parameters of the API path | `API-delete-book` with `{id: 7}` or without `title` | `params.<name>` problem |
-| `query` may only use declared query fields | `API-list-books` with `query: {detailTitle}` | `query.<name>` problem |
-| `body` may only use declared body fields, including required ones | `API-create-book` with `pages`, or without `author` | `body.<name>` problem |
-| A read cannot carry a body | `GET /api/books/{title}` with `body` | `body` problem |
-| Headers are limited to declared ones; the host owns transport headers | `headers: {"x-detail-title": ...}` | `headers.<name>` problem |
-| Business requests go through `context.api` | `fetch("/api/books?detailTitle=...")` | `network` problem |
-
-Reusing an API that several requirements share stays legal: the rule compares the trigger
-with its own designed actions, not with a single owner. A request object built in a variable
-cannot be read statically; it is accepted here and rejected at run time instead.
-
-The compiler-owned client (`frontend/src/ui-api.ts`) embeds the same contract in its catalog
-and validates every request before it is sent, recording `E2E_API_CONTRACT_ERROR` for a
-contradicting request and `E2E_API_ROUTE_ERROR` for a `404 Unknown API route` answer. The E2E
-fixture (`frontend/tests/e2e/support/context.ts`) fails the test on any recorded violation, so
-a handler that catches the rejection still cannot hide it. An `Unknown API route` failure is
-diagnosed against the IR (requested method, path and the declared route of that API) and the
-repair targets the request or `backend/src/api/register.ts`; switching to another business API
-is never the suggested fix.
-
-Step 12 records the audit per requirement and for the final verification:
-
-```json
-"REQ-BOOKS": { "status": "GREEN", "api_contract": "GREEN", "implementation_turns": 2 }
-```
-
-The rules are covered by `tests/test_trigger_contracts.py`, which runs the real stage with a
-model that first writes the hidden-query shortcut (rejected, then repaired on the next turn),
-executes the emitted TypeScript client under Node to observe that the request is never sent,
-and checks the `Unknown API route` diagnosis.
-
-## Repair budget and request context
-
-Every repair agent receives the requirement's own surface, not both source trees. Step 12
-supplies the requirement's triggers, the pages that host them (plus the destination pages the
-scenario context already derived), their local imports, and the handler of each API those
-triggers call; `frontend/src/ui-runtime.ts`, the E2E fixture and `backend/src/api/register.ts`
-are read-only references. Page and handler files stay writable because a missing accessible
-name or an integration defect is a real repair target. `SourceFiles.feedback` still adds any
-file a failing check names, so an unrelated helper arrives in the round that needs it.
-
-`infrastructure/stages/frontend/triggers/workspaces.py` owns that selection and
-`infrastructure/shared/agent/diagnosis.py` classifies each failure as `typescript`,
-`api_route`, `api_contract`, `assertion`, `ui_locator`, `database`, `browser`, `backend` or
-`protocol`. The loop compares signatures (timings, positions and counts removed):
-
-* the same signature three times in a row stops the round budget early, raising `AgentStalled`
-  with the category and the last real feedback; `--max-turns` remains the hard ceiling;
-* a malformed model response is a protocol error, is retried, and never counts as a stall;
-* a task that ends this way is archived as `FAILED` with `category` and `stalled` in
-  `.arc/failures/<task>/failure.json`, so an exhausted requirement is reported, not hidden.
-
-Two checks are skipped only when they cannot change the verdict: the browser run does not
-start when the static API contract already failed, and `npm install` is skipped when
-`node_modules` still matches the recorded dependency signature (`.arc/dependencies.json`) and
-every tool the compiler invokes is present.
-
-`scripts/audit_prompt_payload.py` measures the request size of both policies on a generated
-project without calling a model, and `scripts/analyze_run_log.py` summarizes a `compiler.log`
-(stage durations, reported tokens, check runs). `scripts/perf_measurements.md` records the
-before/after numbers.
-
-## Black-box acceptance
-
-Steps 10 and 12 verify the design: the display suite asserts designed elements, and the
-requirement suites drive one requirement's interaction, mostly through `data-testid`, with
-SQL-seeded Given rows. Neither answers the reviewer's question — *can a visitor who only sees
-the page complete the business flow?* — so the compiler also emits a third, independent layer.
-
-| Layer | Path | What it proves |
-| --- | --- | --- |
-| Display (step 10) | `frontend/tests/ui/*.spec.ts` | Every designed element renders with its designed text, role and accessible name. |
-| Requirement (step 12) | `frontend/tests/e2e/*.spec.ts` | One requirement's UI event reaches its API and its result is visible. |
-| Black box (step 12/13) | `frontend/tests/acceptance/*.journey.spec.ts` | A visitor can complete the whole CRUD journey, and the whole account lifecycle, through the UI alone. |
-
-The layer is compiler-owned and deterministic: `infrastructure/stages/frontend/acceptance/journey.py`
-derives the journey from the accepted IR (`backend_apis.json` for routes, `db_schema.json` for
-the stored entity, `ui_design.json` for pages, labels and bindings, `frontend_triggers.json` for
-which control submits, navigates or deletes). Nothing in it names a concrete domain, so the same
-generator serves books, tickets or notes. One case per derived resource performs:
-
-1. open the entry page and verify the URL;
-2. reach the object list through a real navigation control;
-3. reach the create form through a real navigation control;
-4. create the object by typing into the designed labeled fields;
-5. find it in the list **by its own accessible name**;
-6. open it by clicking that name and verify the URL of the dynamic detail route;
-7. reload, then observe the stored record again;
-8. observe the same record from a second, independent browser context;
-9. modify a field, submit, reload, and read the stored value back;
-10. delete it, then prove it is gone from the list, from the database and from a fresh context.
-
-A second case per resource covers rejection: an invalid submission stays on the form, shows the
-designed `role="alert"` element, writes no row (`database.total()` is unchanged) and is invisible
-to another visitor.
-
-### The account lifecycle is a journey of its own
-
-An application whose whole business is an account declares no create plus read pair, so the CRUD
-derivation finds nothing and the layer used to report `NOT_APPLICABLE` — a green result for an
-application no test ever drove. `infrastructure/stages/frontend/acceptance/account.py` derives the
-second family from the same artifacts, still without a model: it classifies the accepted routes
-(registration, sign-in, sign-out and the caller's session lookup) by method, path and request body,
-finds the table that stores the account and the one that stores the session, and locates the
-designed identity display, entry links and labeled fields. One case per capability performs:
-
-1. a signed-out visitor sees the entry links and no account identity, and reaches the form through
-   the designed link;
-2. the visitor registers with typed values, the home page displays the new account, and the
-   backend really wrote one account row and one session row;
-3. a reload resolves the session again through the session route, and an independent browser
-   context stays signed out;
-4. signing out through the designed control deletes the server-side session, keeps the account and
-   survives a reload;
-5. the same account signs in again through the form and receives a new session;
-6. a duplicate registration is rejected on the form, writes nothing and creates no session;
-7. the right identity with a wrong secret is rejected without a session.
-
-A capability the accepted IR cannot express is never skipped silently: the plan records either a
-**problem** (the design declares no page, control, field or identity display, so the repair loop
-must fix the application) or an explicit **unverified** entry. When nothing can be derived but
-problems exist, the layer reports `UNVERIFIED` instead of `NOT_APPLICABLE`, so an unprovable
-application is never reported as "not applicable". Every requirement scenario of the lifecycle gets
-one traceable coverage record: `COVERED` with the cases that assert it, or `NOT_COVERED` with the
-reason — a scenario that could only be verified by fabricating a session credential stays
-uncovered, because seeding browser storage is exactly what this layer forbids.
-
-The harness (`frontend/tests/acceptance/support/context.ts`, `playwright.acceptance.config.ts`,
-`scripts/test-acceptance.mjs`) is generated, never authored by a task, and enforces the rules a
-black-box test needs:
-
-| Guarantee | How it is enforced |
-| --- | --- |
-| Real browser and real backend | Its own Playwright project boots the real server and Vite app against a runner-owned temporary SQLite database. |
-| Isolated, order-independent contexts | A new browser context per test (`storageState: undefined`), a database reset before each case, unique per-run record names, no `beforeAll`/`describe.serial`. |
-| No mocks | `page.route`, `context.route`, `routeFromHAR` and `unroute` are replaced by throwing functions (`E2E_MOCK_FORBIDDEN`). |
-| No fabricated display state | `window.__ARC_UI_FIXTURE__` is defined as read-only and throws on assignment (`E2E_FIXTURE_FORBIDDEN`). |
-| No SQL-seeded Given data | The database fixture exposes only `rows`, `value`, `count`, `total` and `stores`; any non-`SELECT` statement throws (`E2E_SEED_FORBIDDEN`). |
-| Real side effects | `database.stores(name)` scans every table for the record, so create, update and delete are verified in storage, not just on screen. |
-| Semantic locators | `control()` resolves a label, placeholder or textbox by exact name; `action()`/`record()` resolve a button, link or heading by exact accessible name. |
-| Contract safety | The compiler's API client still reports contract and route violations, so a handler that swallows an error cannot hide it. |
-
-`infrastructure/stages/frontend/acceptance/audit.py` re-reads every spec before the first
-browser run and after every repair attempt, and rejects a suite that would be green without
-proving anything: interception, injected state, browser storage, SQL writes, direct handler or
-`fetch` calls, `page.evaluate`, `test.skip`/`only`/`expect.soft`, `waitForTimeout`, shared
-setup — and it requires user input, a click, a URL assertion, a reload, a database side effect,
-an absence assertion and an independent context.
-
-### Accessible names are part of the design
-
-A reviewer locates a control by role and accessible name, so a record control that renders
-`name + description + timestamp` cannot be identified. The design and implementation prompts
-therefore declare the contract, and step 10 asserts it:
-
-- every interactive element declares `prop.label`, `prop.text` or `prop.name_from`;
-- `prop.name_from` names the binding whose value must be the control's accessible name *exactly*;
-- a record control that binds several values without `prop.name_from` is reported by the journey
-  derivation as a **UI problem**, never worked around in the test.
-
-The failure is explicit and actionable:
-
-```text
-Error: no control in the list exposes the record name as its exact accessible name;
-a record control must render only the record name
-... getByRole('link', { name: 'ARC-ACCEPT-BOOKS', exact: true })
-```
-
-The fix is a dedicated identity control in the page (or an `aria-label` carrying only the record
-name), and the repair loop applies it to the application sources — the journey spec is read-only
-for every task. `tests/test_frontend_acceptance.py` covers the CRUD and account-lifecycle
-derivation, every audit rule, the coverage records, the accessible-name contract, the harness
-guards and the repair loop.
-
-Step 12 runs the layer after the requirements are implemented and records it as its own final
-check, so a failing journey blocks the stage:
-
-```json
-"acceptance": { "status": "GREEN", "specs": ["frontend/tests/acceptance/books.journey.spec.ts"],
-  "tests": { "passed": 2, "failed": 0 }, "audit": { "status": "GREEN" } }
-```
-
-Run only this layer, without a model call or regenerating the application:
-
-```bash
-uv run 13_accept_frontend_blackbox.py --input input --output outputs/demo --offline
-```
-
-Or, inside a generated project:
-
-```bash
-cd outputs/demo
-npm run test:acceptance
-```
-
-Reports: `.arc/frontend_acceptance.json` (journeys, derived controls, audit result, test counts)
-and the `acceptance` entry of `.arc/frontend_e2e.json`.
-
-
-
-
+上游 bash 工具会在输出目录执行模型生成的任意 shell 命令；请在隔离的可信工作区运行。

@@ -1,6 +1,8 @@
-PyYAML
-openai
-python-dotenv
-httpx
-rich>=13,<15
-Pillow>=11,<13
+# mini-SWE-agent v2 is the unchanged execution engine; this ZIP contains only an adapter.
+mini-swe-agent==2.4.6
+PyYAML>=6.0,<7
+python-dotenv>=1,<2
+Pillow>=10,<12
+
+# Pin the model transport and install its declared MCP runtime dependencies.
+litellm[mcp]==1.108.3

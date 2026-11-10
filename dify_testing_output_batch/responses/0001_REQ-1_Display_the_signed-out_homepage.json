@@ -1,0 +1,74 @@
+{
+  "mode": "generate",
+  "cases": [
+    {
+      "requirement_id": "REQ-1",
+      "scenario": "SCN-REQ-1-01 Display the signed-out homepage",
+      "test_name": "REQ-1: SCN-REQ-1-01 Display the signed-out homepage",
+      "given": "The visitor has no session credential.",
+      "when": "Open the home page /.",
+      "then": "Register and Login links are visible with href values /register and /login; no password input or authentication session cookie is present; no same-origin mutating request is issued during homepage load.",
+      "assertions": [
+        "Register link is visible",
+        "Register link has href /register",
+        "Login link is visible",
+        "Login link has href /login",
+        "No password input is present",
+        "No same-origin POST, PUT, PATCH, or DELETE request occurs during homepage load",
+        "No authentication-like session cookie is created"
+      ]
+    },
+    {
+      "requirement_id": "REQ-1",
+      "scenario": "SCN-REQ-1-01 Display the signed-out homepage",
+      "test_name": "REQ-1: SCN-REQ-1-01 Refresh keeps the visitor signed out",
+      "given": "The visitor has no session credential and the signed-out homepage is displayed.",
+      "when": "Refresh the home page /.",
+      "then": "Register and Login links remain visible with href values /register and /login; no password input or authentication session cookie is created.",
+      "assertions": [
+        "Register link remains visible after refresh",
+        "Register link still has href /register",
+        "Login link remains visible after refresh",
+        "Login link still has href /login",
+        "No password input is present after refresh",
+        "No authentication-like session cookie is created after refresh"
+      ]
+    }
+  ],
+  "playwright_test": "import { test, expect } from '@playwright/test';\n\ntest.describe('REQ-1 Homepage and session display', () => {\n  test('REQ-1: SCN-REQ-1-01 Display the signed-out homepage', async ({ page, context }) => {\n    await context.clearCookies();\n\n    const mutatingRequests: { method: string; url: string }[] = [];\n    page.on('request', (request) => {\n      const method = request.method().toUpperCase();\n      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {\n        mutatingRequests.push({ method, url: request.url() });\n      }\n    });\n\n    await page.goto('/');\n\n    const registerLink = page.getByRole('link', { name: 'Register', exact: true });\n    const loginLink = page.getByRole('link', { name: 'Login', exact: true });\n\n    await expect(registerLink).toBeVisible();\n    await expect(registerLink).toHaveAttribute('href', '/register');\n    await expect(loginLink).toBeVisible();\n    await expect(loginLink).toHaveAttribute('href', '/login');\n\n    await expect(page.locator('input[type=\"password\"]')).toHaveCount(0);\n\n    const origin = new URL(page.url()).origin;\n    const sameOriginMutations = mutatingRequests.filter(({ url }) => {\n      try {\n        return new URL(url).origin === origin;\n      } catch {\n        return false;\n      }\n    });\n    expect(sameOriginMutations, 'Homepage load must not issue same-origin mutating requests').toEqual([]);\n\n    const cookies = await context.cookies();\n    const authCookies = cookies.filter((cookie) => /session|auth|token|jwt|sid|user/i.test(cookie.name));\n    expect(authCookies, 'Homepage must not create an authentication session cookie').toEqual([]);\n  });\n\n  test('REQ-1: SCN-REQ-1-01 Refresh keeps the visitor signed out', async ({ page, context }) => {\n    await context.clearCookies();\n    await page.goto('/');\n\n    const registerLink = page.getByRole('link', { name: 'Register', exact: true });\n    const loginLink = page.getByRole('link', { name: 'Login', exact: true });\n\n    await expect(registerLink).toBeVisible();\n    await expect(loginLink).toBeVisible();\n\n    await page.reload();\n\n    await expect(registerLink).toBeVisible();\n    await expect(registerLink).toHaveAttribute('href', '/register');\n    await expect(loginLink).toBeVisible();\n    await expect(loginLink).toHaveAttribute('href', '/login');\n\n    await expect(page.locator('input[type=\"password\"]')).toHaveCount(0);\n\n    const cookies = await context.cookies();\n    const authCookies = cookies.filter((cookie) => /session|auth|token|jwt|sid|user/i.test(cookie.name));\n    expect(authCookies, 'Refreshing signed-out homepage must not create an authentication session cookie').toEqual([]);\n  });\n});\n",
+  "uncovered_requirements": [
+    {
+      "requirement_id": "REQ-1",
+      "reason": "A valid existing session must display the exact username and hide Register and Login. No session fixture, cookie name, session API endpoint, or username display selector/accessible name is provided, so this state cannot be established or asserted."
+    },
+    {
+      "requirement_id": "REQ-1",
+      "reason": "An unrecognized session must leave the visitor signed out. No valid/invalid session cookie format or session lookup endpoint is specified, so an unrecognized session cannot be reliably constructed."
+    },
+    {
+      "requirement_id": "REQ-1",
+      "reason": "Do not briefly display a previously cached username while session identity is unresolved. This requires knowledge of the session lookup request and username display locator to intercept or delay resolution; neither is provided."
+    },
+    {
+      "requirement_id": "REQ-1",
+      "reason": "A failed session lookup must not leave a stale authenticated display. No session lookup endpoint or failure-injection mechanism is specified."
+    },
+    {
+      "requirement_id": "REQ-1",
+      "reason": "Display no authenticated username. No username display selector, accessible name, or DOM contract is provided. The test verifies signed-out entry links and absence of auth cookies/password inputs, but cannot positively assert absence of username text."
+    },
+    {
+      "requirement_id": "REQ-1",
+      "reason": "No passwords, password hashes, or session credentials are displayed. The test checks for no password inputs and no authentication-like cookies, but cannot exhaustively prove that no credential text appears elsewhere without known credential display contracts."
+    }
+  ],
+  "assumptions": [
+    "The Playwright baseURL points to the application root and the home page is available at /.",
+    "A fresh Playwright browser context has no session credential; context.clearCookies() ensures the signed-out precondition.",
+    "The homepage exposes navigation links with accessible names exactly 'Register' and 'Login' and href attributes exactly '/register' and '/login'.",
+    "A same-origin POST, PUT, PATCH, or DELETE request during homepage load would indicate account/session mutation and is therefore treated as a violation of the read-only homepage requirement.",
+    "Authentication-like cookies are identified by names matching /session|auth|token|jwt|sid|user/i; absence of such cookies is used as evidence that no session was created.",
+    "The signed-out state is also evidenced by both Register and Login links remaining visible; the username display element is unknown and therefore not directly asserted."
+  ],
+  "ok": true
+}

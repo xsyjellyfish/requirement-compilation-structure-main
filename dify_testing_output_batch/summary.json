@@ -1,0 +1,43 @@
+{
+  "source": "input\\requirements.yaml",
+  "total_units": 9,
+  "selected": 1,
+  "completed": 1,
+  "results": [
+    {
+      "index": 1,
+      "requirement_id": "REQ-1",
+      "scenario": "Display the signed-out homepage",
+      "status": "generated",
+      "cases": 2,
+      "file": "dify_testing_output_batch\\tests\\0001_REQ-1_Display_the_signed-out_homepage.spec.ts",
+      "uncovered": [
+        {
+          "requirement_id": "REQ-1",
+          "reason": "A valid existing session must display the exact username and hide Register and Login. No session fixture, cookie name, session API endpoint, or username display selector/accessible name is provided, so this state cannot be established or asserted."
+        },
+        {
+          "requirement_id": "REQ-1",
+          "reason": "An unrecognized session must leave the visitor signed out. No valid/invalid session cookie format or session lookup endpoint is specified, so an unrecognized session cannot be reliably constructed."
+        },
+        {
+          "requirement_id": "REQ-1",
+          "reason": "Do not briefly display a previously cached username while session identity is unresolved. This requires knowledge of the session lookup request and username display locator to intercept or delay resolution; neither is provided."
+        },
+        {
+          "requirement_id": "REQ-1",
+          "reason": "A failed session lookup must not leave a stale authenticated display. No session lookup endpoint or failure-injection mechanism is specified."
+        },
+        {
+          "requirement_id": "REQ-1",
+          "reason": "Display no authenticated username. No username display selector, accessible name, or DOM contract is provided. The test verifies signed-out entry links and absence of auth cookies/password inputs, but cannot positively assert absence of username text."
+        },
+        {
+          "requirement_id": "REQ-1",
+          "reason": "No passwords, password hashes, or session credentials are displayed. The test checks for no password inputs and no authentication-like cookies, but cannot exhaustively prove that no credential text appears elsewhere without known credential display contracts."
+        }
+      ],
+      "skipped_tests": false
+    }
+  ]
+}
